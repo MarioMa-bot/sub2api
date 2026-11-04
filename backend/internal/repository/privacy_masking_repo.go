@@ -3,8 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql/sqlgraph"

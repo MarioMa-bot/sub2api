@@ -28,6 +28,7 @@ func RegisterGatewayRoutes(
 	opsService *service.OpsService,
 	settingService *service.SettingService,
 	compositeResolver *service.CompositeRouteResolver,
+	privacyMaskingMiddleware *service.PrivacyMaskingMiddleware,
 	cfg *config.Config,
 ) {
 	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
@@ -186,6 +187,10 @@ func RegisterGatewayRoutes(
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(groupModelAllowlist)
 	gateway.Use(compositeTarget)
+	// 隐私脱敏中间件：在请求转发前脱敏敏感信息，响应返回时恢复占位符
+	if privacyMaskingMiddleware != nil {
+		gateway.Use(privacyMaskingMiddleware.MaskRequest, privacyMaskingMiddleware.UnmaskResponse)
+	}
 	gateway.Use(requireGroupAnthropic)
 	{
 		// /v1/messages: auto-route based on group platform
