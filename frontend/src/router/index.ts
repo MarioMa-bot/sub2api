@@ -647,6 +647,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/privacy-masking',
+    name: 'AdminPrivacyMasking',
+    component: () => import('@/views/admin/PrivacyMaskingView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Privacy Masking',
+      titleKey: 'admin.privacyMasking.title',
+      descriptionKey: 'admin.privacyMasking.description'
+    }
+  },
+  {
     path: '/admin/usage',
     name: 'AdminUsage',
     component: () => import('@/views/admin/UsageView.vue'),

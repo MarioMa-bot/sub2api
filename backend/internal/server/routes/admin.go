@@ -127,6 +127,9 @@ func RegisterAdminRoutes(
 		// 独立提示词输入审计
 		registerPromptAuditRoutes(admin, h)
 
+		// 隐私脱敏
+		registerPrivacyMaskingRoutes(admin, h)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 
@@ -900,5 +903,18 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 			return
 		}
 		c.Next()
+	}
+}
+
+// registerPrivacyMaskingRoutes 注册隐私脱敏路由
+func registerPrivacyMaskingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	privacyMasking := admin.Group("/privacy-masking")
+	{
+		privacyMasking.GET("/config", h.Admin.PrivacyMasking.GetGlobalConfig)
+		privacyMasking.PUT("/config", h.Admin.PrivacyMasking.UpdateGlobalConfig)
+		privacyMasking.GET("/groups/:groupId/config", h.Admin.PrivacyMasking.GetGroupConfig)
+		privacyMasking.PUT("/groups/:groupId/config", h.Admin.PrivacyMasking.UpdateGroupConfig)
+		privacyMasking.GET("/logs", h.Admin.PrivacyMasking.ListLogs)
+		privacyMasking.GET("/stats", h.Admin.PrivacyMasking.GetStats)
 	}
 }
