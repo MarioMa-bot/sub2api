@@ -3,7 +3,7 @@
     <div class="mx-auto max-w-6xl space-y-6">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-          隐私脱敏配置
+          {{ t('admin.privacyMasking.title') }}
         </h1>
       </div>
 
@@ -19,10 +19,10 @@
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                启用隐私脱敏
+                {{ t('admin.privacyMasking.enabled.title') }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                在请求发送到上游前自动检测并脱敏敏感信息
+                {{ t('admin.privacyMasking.enabled.description') }}
               </p>
             </div>
             <label class="relative inline-flex cursor-pointer items-center">
@@ -40,7 +40,7 @@
         <!-- Basic Settings -->
         <div class="card p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            基础配置
+            {{ t('admin.privacyMasking.basic.title') }}
           </h2>
 
           <div class="space-y-3">
@@ -53,10 +53,10 @@
               />
               <div>
                 <div class="text-sm font-medium text-gray-900 dark:text-white">
-                  脱敏密钥和令牌
+                  {{ t('admin.privacyMasking.basic.maskSecrets.title') }}
                 </div>
                 <div class="text-sm text-gray-500 dark:text-gray-400">
-                  自动检测并脱敏 API 密钥、私钥、令牌、密码等敏感凭证
+                  {{ t('admin.privacyMasking.basic.maskSecrets.description') }}
                 </div>
               </div>
             </label>
@@ -70,10 +70,10 @@
               />
               <div>
                 <div class="text-sm font-medium text-gray-900 dark:text-white">
-                  脱敏个人信息
+                  {{ t('admin.privacyMasking.basic.maskPersonal.title') }}
                 </div>
                 <div class="text-sm text-gray-500 dark:text-gray-400">
-                  自动检测并脱敏邮箱、电话、信用卡号等个人身份信息
+                  {{ t('admin.privacyMasking.basic.maskPersonal.description') }}
                 </div>
               </div>
             </label>
@@ -83,20 +83,20 @@
         <!-- Action Settings -->
         <div class="card p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            动作配置
+            {{ t('admin.privacyMasking.actions.title') }}
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            对检测到的每种敏感信息采取不同的动作
+            {{ t('admin.privacyMasking.actions.description') }}
           </p>
 
           <div class="space-y-3">
             <div v-for="kind in sensitiveKinds" :key="kind.value" class="flex items-center justify-between">
               <div>
                 <div class="text-sm font-medium text-gray-900 dark:text-white">
-                  {{ kind.label }}
+                  {{ t(`admin.privacyMasking.actions.kinds.${kind.value}.label`) }}
                 </div>
                 <div class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ kind.description }}
+                  {{ t(`admin.privacyMasking.actions.kinds.${kind.value}.description`) }}
                 </div>
               </div>
               <select
@@ -104,9 +104,9 @@
                 class="rounded-md border-gray-300 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 @change="saveConfig"
               >
-                <option value="mask">脱敏 (推荐)</option>
-                <option value="warn">仅警告</option>
-                <option value="block">阻止请求</option>
+                <option value="mask">{{ t('admin.privacyMasking.actions.mask') }}</option>
+                <option value="warn">{{ t('admin.privacyMasking.actions.warn') }}</option>
+                <option value="block">{{ t('admin.privacyMasking.actions.block') }}</option>
               </select>
             </div>
           </div>
@@ -115,17 +115,17 @@
         <!-- Allow List -->
         <div class="card p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            白名单
+            {{ t('admin.privacyMasking.allowList.title') }}
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            这些值永远不会被脱敏（每行一个，精确匹配）
+            {{ t('admin.privacyMasking.allowList.description') }}
           </p>
 
           <textarea
             v-model="allowListText"
             class="w-full rounded-md border-gray-300 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
             rows="5"
-            placeholder="example-key-12345&#10;test@example.com&#10;+1234567890"
+            :placeholder="t('admin.privacyMasking.allowList.placeholder')"
             @blur="updateAllowList"
           ></textarea>
         </div>
@@ -133,10 +133,10 @@
         <!-- Custom Rules -->
         <div class="card p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            自定义规则
+            {{ t('admin.privacyMasking.customRules.title') }}
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            使用正则表达式定义自定义的脱敏规则
+            {{ t('admin.privacyMasking.customRules.description') }}
           </p>
 
           <div class="space-y-3">
@@ -149,22 +149,22 @@
                 v-model="rule.pattern"
                 type="text"
                 class="flex-1 rounded-md border-gray-300 text-sm font-mono focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                placeholder="正则表达式"
+                :placeholder="t('admin.privacyMasking.customRules.patternPlaceholder')"
               />
               <select
                 v-model="rule.action"
                 class="rounded-md border-gray-300 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
               >
-                <option value="mask">脱敏</option>
-                <option value="warn">警告</option>
-                <option value="block">阻止</option>
+                <option value="mask">{{ t('admin.privacyMasking.actions.mask') }}</option>
+                <option value="warn">{{ t('admin.privacyMasking.actions.warn') }}</option>
+                <option value="block">{{ t('admin.privacyMasking.actions.block') }}</option>
               </select>
               <button
                 type="button"
                 class="rounded-md p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
                 @click="removeCustomRule(index)"
               >
-                删除
+                {{ t('admin.privacyMasking.customRules.remove') }}
               </button>
             </div>
 
@@ -173,7 +173,7 @@
               class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
               @click="addCustomRule"
             >
-              + 添加规则
+              {{ t('admin.privacyMasking.customRules.add') }}
             </button>
           </div>
 
@@ -184,7 +184,7 @@
               @click="saveConfig"
               :disabled="saving"
             >
-              {{ saving ? '保存中...' : '保存配置' }}
+              {{ saving ? t('admin.privacyMasking.buttons.saving') : t('admin.privacyMasking.buttons.save') }}
             </button>
           </div>
         </div>
@@ -193,14 +193,14 @@
         <div class="card p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-              最近的脱敏日志
+              {{ t('admin.privacyMasking.logs.title') }}
             </h2>
             <button
               type="button"
               class="text-sm text-primary-600 hover:text-primary-700"
               @click="loadLogs"
             >
-              刷新
+              {{ t('admin.privacyMasking.logs.refresh') }}
             </button>
           </div>
 
@@ -209,18 +209,28 @@
           </div>
 
           <div v-else-if="logs.length === 0" class="py-8 text-center text-sm text-gray-500">
-            暂无脱敏日志
+            {{ t('admin.privacyMasking.logs.empty') }}
           </div>
 
           <div v-else class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead>
                 <tr>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">时间</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">类型</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">数量</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">动作</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">状态</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {{ t('admin.privacyMasking.logs.columns.time') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {{ t('admin.privacyMasking.logs.columns.kinds') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {{ t('admin.privacyMasking.logs.columns.count') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {{ t('admin.privacyMasking.logs.columns.action') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {{ t('admin.privacyMasking.logs.columns.status') }}
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -240,15 +250,15 @@
                       'bg-yellow-100 text-yellow-800': log.warned_count > 0,
                       'bg-red-100 text-red-800': log.blocked_count > 0
                     }">
-                      {{ log.masked_count > 0 ? '已脱敏' : log.warned_count > 0 ? '已警告' : '已阻止' }}
+                      {{ getActionLabel(log) }}
                     </span>
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-sm">
                     <span v-if="log.request_blocked" class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
-                      已阻止
+                      {{ t('admin.privacyMasking.logs.status.blocked') }}
                     </span>
                     <span v-else class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
-                      已通过
+                      {{ t('admin.privacyMasking.logs.status.passed') }}
                     </span>
                   </td>
                 </tr>
@@ -262,9 +272,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/AppLayout.vue'
 import { apiClient } from '@/lib/api-client'
+
+const { t } = useI18n()
 
 interface PrivacyMaskingConfig {
   id?: number
@@ -313,13 +326,13 @@ const config = ref<PrivacyMaskingConfig>({
 const allowListText = ref('')
 
 const sensitiveKinds = [
-  { value: 'API_KEY', label: 'API 密钥', description: 'OpenAI、Anthropic 等 API 密钥' },
-  { value: 'PRIVATE_KEY', label: '私钥', description: 'RSA、SSH 私钥' },
-  { value: 'TOKEN', label: '令牌', description: 'JWT、GitHub token 等' },
-  { value: 'PASSWORD', label: '密码', description: '密码字段' },
-  { value: 'EMAIL', label: '邮箱', description: '电子邮箱地址' },
-  { value: 'PHONE', label: '电话', description: '电话号码' },
-  { value: 'CREDIT_CARD', label: '信用卡', description: '信用卡号' }
+  { value: 'API_KEY' },
+  { value: 'PRIVATE_KEY' },
+  { value: 'TOKEN' },
+  { value: 'PASSWORD' },
+  { value: 'EMAIL' },
+  { value: 'PHONE' },
+  { value: 'CREDIT_CARD' }
 ]
 
 onMounted(async () => {
@@ -343,10 +356,8 @@ async function saveConfig() {
   try {
     const response = await apiClient.put('/api/admin/privacy-masking/config', config.value)
     config.value = response.data
-    // Show success message
   } catch (error) {
     console.error('Failed to save config:', error)
-    // Show error message
   } finally {
     saving.value = false
   }
@@ -388,5 +399,11 @@ function removeCustomRule(index: number) {
 function formatDate(dateStr: string) {
   const date = new Date(dateStr)
   return date.toLocaleString('zh-CN')
+}
+
+function getActionLabel(log: PrivacyMaskingLog) {
+  if (log.masked_count > 0) return t('admin.privacyMasking.logs.actions.masked')
+  if (log.warned_count > 0) return t('admin.privacyMasking.logs.actions.warned')
+  return t('admin.privacyMasking.logs.actions.blocked')
 }
 </script>

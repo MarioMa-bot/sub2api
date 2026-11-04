@@ -16,6 +16,7 @@ import (
 )
 
 // PrivacyMaskingAction 定义对检测到的敏感信息采取的动作
+// Privacy Masking Action: defines the action to take for detected sensitive data
 type PrivacyMaskingAction string
 
 const (
@@ -25,6 +26,7 @@ const (
 )
 
 // PrivacyMaskingKind 敏感信息类型
+// Privacy Masking Kind: types of sensitive information
 type PrivacyMaskingKind string
 
 const (
@@ -40,6 +42,7 @@ const (
 )
 
 // PrivacyMaskingConfig 脱敏配置
+// Privacy Masking Configuration: stores global or per-group masking settings
 type PrivacyMaskingConfig struct {
 	ID             int64                               `json:"id" gorm:"primaryKey"`
 	Enabled        bool                                `json:"enabled" gorm:"not null;default:false"`
@@ -137,8 +140,10 @@ type MaskingResult struct {
 }
 
 // NewPrivacyMaskingService 创建脱敏服务
+// Create a new privacy masking service instance
 func NewPrivacyMaskingService() (*PrivacyMaskingService, error) {
 	// 生成 HMAC key（应该持久化，但为简单起见这里每次生成）
+	// Generate HMAC key (should be persisted, but generated each time for simplicity)
 	hmacKey := make([]byte, 32)
 	if _, err := rand.Read(hmacKey); err != nil {
 		return nil, fmt.Errorf("failed to generate HMAC key: %w", err)
@@ -365,19 +370,23 @@ func (s *PrivacyMaskingService) applyMasking(text string, detections []MaskingDe
 }
 
 // generatePlaceholder 生成稳定的占位符
+// Generate a stable placeholder for a sensitive value using HMAC-SHA256
 func (s *PrivacyMaskingService) generatePlaceholder(kind PrivacyMaskingKind, value string) string {
 	// 使用 HMAC 生成稳定的哈希
+	// Use HMAC to generate a stable hash
 	h := hmac.New(sha256.New, s.hmacKey)
 	h.Write([]byte(value))
 	hash := h.Sum(nil)
 	
 	// 取前8字节，转为 base32（更短更可读）
+	// Take first 8 bytes and convert to base32 (shorter and more readable)
 	suffix := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:8])
 	suffix = strings.ToLower(suffix)[:8]
 	
 	placeholder := fmt.Sprintf("{{%s_%s}}", kind, suffix)
 	
-	// 存储映射
+	// 存储映射（仅在内存中）
+	// Store mapping (in memory only, never persisted)
 	s.mu.Lock()
 	s.values[placeholder] = value
 	s.mu.Unlock()
@@ -385,13 +394,15 @@ func (s *PrivacyMaskingService) generatePlaceholder(kind PrivacyMaskingKind, val
 	return placeholder
 }
 
-// Unmask 恢复占位符
+// Unmask 恢复占位符为原始值
+// Restore placeholders back to original values in response text
 func (s *PrivacyMaskingService) Unmask(ctx context.Context, text string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := text
 	// 查找所有占位符 {{KIND_hash}}
+	// Find all placeholders in the format {{KIND_hash}}
 	re := regexp.MustCompile(`\{\{([A-Z_]+)_([a-z0-9]+)\}\}`)
 	matches := re.FindAllStringSubmatch(text, -1)
 
