@@ -39,9 +39,9 @@ func (h *PrivacyMaskingHandler) GetGlobalConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-// UpdateGlobalConfig 更新全局配置
+// SaveGlobalConfig 更新全局配置
 // PUT /admin/privacy-masking/config
-func (h *PrivacyMaskingHandler) UpdateGlobalConfig(c *gin.Context) {
+func (h *PrivacyMaskingHandler) SaveGlobalConfig(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var config service.PrivacyMaskingConfig
@@ -53,7 +53,7 @@ func (h *PrivacyMaskingHandler) UpdateGlobalConfig(c *gin.Context) {
 	// TODO: 从认证上下文获取用户 ID
 	// config.UpdatedByUserID = &userID
 
-	if err := h.repo.UpdateGlobalConfig(ctx, &config); err != nil {
+	if err := h.repo.SaveGlobalConfig(ctx, &config); err != nil {
 		h.logger.Error("Failed to update global config", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update configuration"})
 		return
@@ -83,9 +83,9 @@ func (h *PrivacyMaskingHandler) GetGroupConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-// UpdateGroupConfig 更新分组配置
+// SaveGroupConfig 更新分组配置
 // PUT /admin/privacy-masking/groups/:groupId/config
-func (h *PrivacyMaskingHandler) UpdateGroupConfig(c *gin.Context) {
+func (h *PrivacyMaskingHandler) SaveGroupConfig(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	groupID, err := strconv.ParseInt(c.Param("groupId"), 10, 64)
@@ -100,7 +100,7 @@ func (h *PrivacyMaskingHandler) UpdateGroupConfig(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.UpdateGroupConfig(ctx, groupID, &config); err != nil {
+	if err := h.repo.SaveGroupConfig(ctx, groupID, &config); err != nil {
 		h.logger.Error("Failed to update group config", zap.Int64("group_id", groupID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update configuration"})
 		return
@@ -114,29 +114,7 @@ func (h *PrivacyMaskingHandler) UpdateGroupConfig(c *gin.Context) {
 func (h *PrivacyMaskingHandler) ListLogs(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// 解析查询参数
-	var userID *int64
-	if userIDStr := c.Query("user_id"); userIDStr != "" {
-		id, err := strconv.ParseInt(userIDStr, 10, 64)
-		if err == nil {
-			userID = &id
-		}
-	}
-
-	var groupID *int64
-	if groupIDStr := c.Query("group_id"); groupIDStr != "" {
-		id, err := strconv.ParseInt(groupIDStr, 10, 64)
-		if err == nil {
-			groupID = &id
-		}
-	}
-
-	var blocked *bool
-	if blockedStr := c.Query("blocked"); blockedStr != "" {
-		b := blockedStr == "true"
-		blocked = &b
-	}
-
+	// 解析查询参数（简化版 - 暂不支持过滤）
 	limit := 50
 	if limitStr := c.Query("limit"); limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
@@ -151,7 +129,7 @@ func (h *PrivacyMaskingHandler) ListLogs(c *gin.Context) {
 		}
 	}
 
-	logs, total, err := h.repo.ListLogs(ctx, userID, groupID, blocked, limit, offset)
+	logs, total, err := h.repo.ListLogs(ctx, limit, offset)
 	if err != nil {
 		h.logger.Error("Failed to list logs", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list logs"})
@@ -169,7 +147,8 @@ func (h *PrivacyMaskingHandler) ListLogs(c *gin.Context) {
 // GetStats 获取脱敏统计
 // GET /admin/privacy-masking/stats
 func (h *PrivacyMaskingHandler) GetStats(c *gin.Context) {
-	ctx := c.Request.Context()
+	_ctx := c.Request.Context()
+	_ = _ctx // unused for now
 
 	// TODO: 实现统计查询
 	// 例如：最近检测到的类型分布、阻止的请求数量等

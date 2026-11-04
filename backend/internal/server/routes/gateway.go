@@ -189,7 +189,8 @@ func RegisterGatewayRoutes(
 	gateway.Use(compositeTarget)
 	// 隐私脱敏中间件：在请求转发前脱敏敏感信息，响应返回时恢复占位符
 	if privacyMaskingMiddleware != nil {
-		gateway.Use(privacyMaskingMiddleware.MaskRequest, privacyMaskingMiddleware.UnmaskResponse)
+		gateway.Use(privacyMaskingMiddleware.MaskRequest())
+		gateway.Use(privacyMaskingMiddleware.UnmaskResponse())
 	}
 	gateway.Use(requireGroupAnthropic)
 	{

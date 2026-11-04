@@ -911,9 +911,9 @@ func registerPrivacyMaskingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	privacyMasking := admin.Group("/privacy-masking")
 	{
 		privacyMasking.GET("/config", h.Admin.PrivacyMasking.GetGlobalConfig)
-		privacyMasking.PUT("/config", h.Admin.PrivacyMasking.UpdateGlobalConfig)
+		privacyMasking.PUT("/config", h.Admin.PrivacyMasking.SaveGlobalConfig)
 		privacyMasking.GET("/groups/:groupId/config", h.Admin.PrivacyMasking.GetGroupConfig)
-		privacyMasking.PUT("/groups/:groupId/config", h.Admin.PrivacyMasking.UpdateGroupConfig)
+		privacyMasking.PUT("/groups/:groupId/config", h.Admin.PrivacyMasking.SaveGroupConfig)
 		privacyMasking.GET("/logs", h.Admin.PrivacyMasking.ListLogs)
 		privacyMasking.GET("/stats", h.Admin.PrivacyMasking.GetStats)
 	}
