@@ -238,7 +238,7 @@ curl -s -X POST localhost:5002/analyze -H 'content-type: application/json' \
 
 ### 模型与限制
 
-- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 650 MB，常驻内存约 500 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
+- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 850 MB，常驻内存约 450 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
 - 小模型准确率有限：中文人名、少见地名、英文小写人名都可能漏检；也可能把普通词误判为机构。需要更高准确率时可把 `PRIVACY_NER_EN_MODEL` / `PRIVACY_NER_ZH_MODEL` 换成 `*_lg` 模型（需自行修改 `requirements.txt`，延迟和内存会上升，相应调大超时）。
 - 每次请求最多送检约 32 KB 文本，超出时优先保留最新的消息；更早的长对话历史只做规则脱敏。
 - 实体在原始 JSON 中按「UTF-8 原文」和「`\uXXXX` 转义」两种编码查找；其他罕见编码形式会漏掉（只影响 L2，不影响规则）。

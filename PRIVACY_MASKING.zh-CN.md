@@ -169,7 +169,7 @@ curl -s -X POST localhost:5002/analyze -H 'content-type: application/json' \
 
 #### 模型与限制
 
-- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 650 MB，常驻内存约 500 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
+- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 850 MB，常驻内存约 450 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
 - 小模型准确率有限：中文人名、少见地名、英文小写人名都可能漏检；也可能把普通词误判为机构。需要更高准确率时可把 `PRIVACY_NER_EN_MODEL` / `PRIVACY_NER_ZH_MODEL` 换成 `*_lg` 模型（需自行修改 `requirements.txt`，延迟和内存会上升，相应调大超时）。
 - 每次请求最多送检约 32 KB 文本，超出时优先保留最新的消息；更早的长对话历史只做规则脱敏。
 - 实体在原始 JSON 中按「UTF-8 原文」和「`\uXXXX` 转义」两种编码查找；其他罕见编码形式会漏掉（只影响 L2，不影响规则）。
@@ -396,7 +396,7 @@ Then go to Admin → Privacy Masking → Rules → "Smart detection / 智能检�
 **Settings:** admin UI fields `smart_masking_enabled`, `smart_sidecar_url`, `smart_timeout_ms` (80), `smart_min_score` (0.6) and `smart_entities`, added by migration `252_privacy_masking_smart_detection.sql`. Backend env var `PRIVACY_MASKING_SMART_URL`. Sidecar env vars `PRIVACY_NER_LANGUAGES` (`en,zh`), `PRIVACY_NER_MIN_SCORE` (0.5), `PRIVACY_NER_MAX_TEXT_CHARS` (65536) and `PRIVACY_NER_PORT` (5002). Compose build arg `PRIVACY_NER_PIP_INDEX_URL`. New admin API: `POST /api/v1/admin/privacy-masking/smart/check`.
 
 **Limits:**
-- spaCy small models (`en_core_web_sm`, `zh_core_web_sm`) on CPU: about 650 MB image and ~500 MB RAM, 5–15 ms per call. Mixed zh/en text runs both models.
+- spaCy small models (`en_core_web_sm`, `zh_core_web_sm`) on CPU: about 850 MB image and ~450 MB RAM, 5–15 ms per call. Mixed zh/en text runs both models.
 - Small models miss some names (especially Chinese ones) and may produce false positives. Switch to `*_lg` models for accuracy, at the cost of latency and memory.
 - At most about 32 KB of text per request is scanned, newest messages first; older history gets rule masking only.
 - Entities are matched in the raw JSON as UTF-8 text or `\uXXXX` escapes only.
