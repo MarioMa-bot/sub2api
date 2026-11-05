@@ -23,7 +23,8 @@ func NewPrivacyMaskingRepository(db *sql.DB) service.PrivacyMaskingStore {
 }
 
 const privacyMaskingConfigColumns = `id, enabled, mask_secrets, mask_personal, masked_kinds, custom_rules,
-allow_list, kind_actions, group_id, created_at, updated_at, updated_by_user_id`
+allow_list, kind_actions, group_id, created_at, updated_at, updated_by_user_id,
+smart_masking_enabled, smart_sidecar_url, smart_timeout_ms, smart_min_score, smart_entities`
 
 // GetGlobalConfig 获取全局配置（group_id IS NULL 的那一行）
 func (r *privacyMaskingRepository) GetGlobalConfig(ctx context.Context) (*service.PrivacyMaskingConfig, error) {
@@ -33,11 +34,14 @@ FROM privacy_masking_config WHERE group_id IS NULL ORDER BY id LIMIT 1`)
 	if errors.Is(err, sql.ErrNoRows) {
 		// 迁移会插入默认行；被手工删除时按默认（关闭）处理
 		return &service.PrivacyMaskingConfig{
-			MaskSecrets: true,
-			MaskedKinds: map[string]bool{},
-			CustomRules: []service.PrivacyMaskingRule{},
-			AllowList:   []string{},
-			KindActions: map[string]service.PrivacyMaskingAction{},
+			MaskSecrets:    true,
+			MaskedKinds:    map[string]bool{},
+			CustomRules:    []service.PrivacyMaskingRule{},
+			AllowList:      []string{},
+			KindActions:    map[string]service.PrivacyMaskingAction{},
+			SmartTimeoutMS: service.DefaultSmartTimeoutMS,
+			SmartMinScore:  service.DefaultSmartMinScore,
+			SmartEntities:  service.DefaultSmartEntities(),
 		}, nil
 	}
 	return cfg, err
@@ -49,10 +53,16 @@ func (r *privacyMaskingRepository) SaveGlobalConfig(ctx context.Context, cfg *se
 	if err != nil {
 		return err
 	}
-	args := []any{cfg.Enabled, cfg.MaskSecrets, cfg.MaskPersonal, maskedKinds, customRules, allowList, kindActions, nullInt64Ptr(cfg.UpdatedByUserID)}
+	smartEntities, err := json.Marshal(nonNilStrings(cfg.SmartEntities))
+	if err != nil {
+		return err
+	}
+	args := []any{cfg.Enabled, cfg.MaskSecrets, cfg.MaskPersonal, maskedKinds, customRules, allowList, kindActions, nullInt64Ptr(cfg.UpdatedByUserID),
+		cfg.SmartMaskingEnabled, cfg.SmartSidecarURL, cfg.SmartTimeoutMS, cfg.SmartMinScore, string(smartEntities)}
 	res, err := r.db.ExecContext(ctx, `UPDATE privacy_masking_config
 SET enabled = $1, mask_secrets = $2, mask_personal = $3, masked_kinds = $4::jsonb, custom_rules = $5::jsonb,
-    allow_list = $6::jsonb, kind_actions = $7::jsonb, updated_by_user_id = $8
+    allow_list = $6::jsonb, kind_actions = $7::jsonb, updated_by_user_id = $8,
+    smart_masking_enabled = $9, smart_sidecar_url = $10, smart_timeout_ms = $11, smart_min_score = $12, smart_entities = $13::jsonb
 WHERE group_id IS NULL`, args...)
 	if err != nil {
 		return fmt.Errorf("update privacy masking config: %w", err)
@@ -61,8 +71,9 @@ WHERE group_id IS NULL`, args...)
 		return nil
 	}
 	if _, err := r.db.ExecContext(ctx, `INSERT INTO privacy_masking_config
-(enabled, mask_secrets, mask_personal, masked_kinds, custom_rules, allow_list, kind_actions, updated_by_user_id)
-VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8)`, args...); err != nil {
+(enabled, mask_secrets, mask_personal, masked_kinds, custom_rules, allow_list, kind_actions, updated_by_user_id,
+ smart_masking_enabled, smart_sidecar_url, smart_timeout_ms, smart_min_score, smart_entities)
+VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb)`, args...); err != nil {
 		return fmt.Errorf("insert privacy masking config: %w", err)
 	}
 	return nil
@@ -275,16 +286,19 @@ func scanPrivacyMaskingConfig(row privacyMaskingRowScanner) (*service.PrivacyMas
 	var (
 		cfg                                              service.PrivacyMaskingConfig
 		maskedKinds, customRules, allowList, kindActions []byte
+		smartEntities                                    []byte
 		groupID, updatedBy                               sql.NullInt64
 	)
 	if err := row.Scan(&cfg.ID, &cfg.Enabled, &cfg.MaskSecrets, &cfg.MaskPersonal, &maskedKinds, &customRules,
-		&allowList, &kindActions, &groupID, &cfg.CreatedAt, &cfg.UpdatedAt, &updatedBy); err != nil {
+		&allowList, &kindActions, &groupID, &cfg.CreatedAt, &cfg.UpdatedAt, &updatedBy,
+		&cfg.SmartMaskingEnabled, &cfg.SmartSidecarURL, &cfg.SmartTimeoutMS, &cfg.SmartMinScore, &smartEntities); err != nil {
 		return nil, err
 	}
 	cfg.MaskedKinds = map[string]bool{}
 	cfg.CustomRules = []service.PrivacyMaskingRule{}
 	cfg.AllowList = []string{}
 	cfg.KindActions = map[string]service.PrivacyMaskingAction{}
+	cfg.SmartEntities = []string{}
 	for _, part := range []struct {
 		raw  []byte
 		dest any
@@ -294,6 +308,7 @@ func scanPrivacyMaskingConfig(row privacyMaskingRowScanner) (*service.PrivacyMas
 		{customRules, &cfg.CustomRules, "custom_rules"},
 		{allowList, &cfg.AllowList, "allow_list"},
 		{kindActions, &cfg.KindActions, "kind_actions"},
+		{smartEntities, &cfg.SmartEntities, "smart_entities"},
 	} {
 		if len(part.raw) == 0 {
 			continue
@@ -347,4 +362,11 @@ func privacyNullString(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nonNilStrings(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }

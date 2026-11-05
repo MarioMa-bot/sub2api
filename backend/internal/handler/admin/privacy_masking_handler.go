@@ -151,6 +151,26 @@ func (h *PrivacyMaskingHandler) GetStats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
+// CheckSmartSidecar 检测智能脱敏旁路是否可达；url 为空时检测已保存的配置（或环境变量）
+// POST /api/v1/admin/privacy-masking/smart/check
+func (h *PrivacyMaskingHandler) CheckSmartSidecar(c *gin.Context) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "Invalid request: "+err.Error())
+			return
+		}
+	}
+	target, latency, err := h.service.CheckSmartSidecar(c.Request.Context(), req.URL)
+	result := gin.H{"ok": err == nil, "url": target, "latency_ms": latency.Milliseconds()}
+	if err != nil {
+		result["error"] = err.Error()
+	}
+	response.Success(c, result)
+}
+
 func parsePrivacyMaskingTimeRange(c *gin.Context) (*time.Time, *time.Time, bool) {
 	var start, end *time.Time
 	for _, p := range []struct {

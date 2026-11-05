@@ -915,5 +915,6 @@ func registerPrivacyMaskingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		privacyMasking.GET("/logs", h.Admin.PrivacyMasking.ListLogs)
 		privacyMasking.GET("/logs/endpoints", h.Admin.PrivacyMasking.ListEndpoints)
 		privacyMasking.GET("/stats", h.Admin.PrivacyMasking.GetStats)
+		privacyMasking.POST("/smart/check", h.Admin.PrivacyMasking.CheckSmartSidecar)
 	}
 }

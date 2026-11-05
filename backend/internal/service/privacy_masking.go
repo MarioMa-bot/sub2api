@@ -69,6 +69,13 @@ type PrivacyMaskingConfig struct {
 	CreatedAt       time.Time                       `json:"created_at"`
 	UpdatedAt       time.Time                       `json:"updated_at"`
 	UpdatedByUserID *int64                          `json:"updated_by_user_id,omitempty"`
+
+	// 智能脱敏（Presidio 旁路），动作沿用 KindActions，MaskedKinds 不影响智能实体
+	SmartMaskingEnabled bool     `json:"smart_masking_enabled"`
+	SmartSidecarURL     string   `json:"smart_sidecar_url"`
+	SmartTimeoutMS      int      `json:"smart_timeout_ms"`
+	SmartMinScore       float64  `json:"smart_min_score"`
+	SmartEntities       []string `json:"smart_entities"`
 }
 
 // PrivacyMaskingRule 自定义脱敏规则
@@ -168,6 +175,7 @@ var placeholderPattern = regexp.MustCompile(`\{\{([A-Z][A-Z0-9_]*)_([a-z0-9]{8})
 // PrivacyMaskingService 隐私脱敏服务
 type PrivacyMaskingService struct {
 	store   PrivacyMaskingStore
+	smart   SmartDetector
 	hmacKey []byte // HMAC key for generating stable placeholders
 
 	mu          sync.RWMutex
@@ -215,7 +223,7 @@ func NewPrivacyMaskingService(store PrivacyMaskingStore) (*PrivacyMaskingService
 	if _, err := rand.Read(hmacKey); err != nil {
 		return nil, fmt.Errorf("failed to generate HMAC key: %w", err)
 	}
-	return &PrivacyMaskingService{store: store, hmacKey: hmacKey}, nil
+	return &PrivacyMaskingService{store: store, smart: NewPresidioSmartDetector(), hmacKey: hmacKey}, nil
 }
 
 func defaultPrivacyMaskingConfig() *PrivacyMaskingConfig {
@@ -226,6 +234,10 @@ func defaultPrivacyMaskingConfig() *PrivacyMaskingConfig {
 		CustomRules: []PrivacyMaskingRule{},
 		AllowList:   []string{},
 		KindActions: map[string]PrivacyMaskingAction{},
+
+		SmartTimeoutMS: DefaultSmartTimeoutMS,
+		SmartMinScore:  DefaultSmartMinScore,
+		SmartEntities:  DefaultSmartEntities(),
 	}
 }
 
@@ -387,10 +399,10 @@ func ValidatePrivacyMaskingConfig(cfg *PrivacyMaskingConfig) error {
 			return fmt.Errorf("%w: custom rule #%d has invalid action %q", ErrPrivacyMaskingInvalidConfig, i+1, rule.Action)
 		}
 	}
-	return nil
+	return validateSmartConfig(cfg)
 }
 
-// Mask 对文本进行脱敏
+// Mask 对文本进行脱敏（仅规则，不调用智能检测旁路）
 func (s *PrivacyMaskingService) Mask(ctx context.Context, text string) (*MaskingResult, error) {
 	cfg, rules, err := s.snapshot(ctx)
 	if err != nil {
@@ -399,7 +411,10 @@ func (s *PrivacyMaskingService) Mask(ctx context.Context, text string) (*Masking
 	if !cfg.Enabled {
 		return &MaskingResult{Masked: text}, nil
 	}
+	return s.buildMaskingResult(text, detectWithRules(cfg, rules, text)), nil
+}
 
+func detectWithRules(cfg *PrivacyMaskingConfig, rules []*maskingRule, text string) []MaskingDetection {
 	detections := make([]MaskingDetection, 0)
 	for _, rule := range rules {
 		for _, match := range rule.Pattern.FindAllStringSubmatchIndex(text, -1) {
@@ -420,12 +435,16 @@ func (s *PrivacyMaskingService) Mask(ctx context.Context, text string) (*Masking
 			})
 		}
 	}
+	return detections
+}
 
+// buildMaskingResult 合并、去重并应用检测结果；规则命中排在智能命中之前，重叠时优先保留规则结果
+func (s *PrivacyMaskingService) buildMaskingResult(text string, detections []MaskingDetection) *MaskingResult {
 	result := &MaskingResult{Masked: text, Detections: dedupeDetections(detections)}
 	if len(result.Detections) > 0 {
 		result.Masked = s.applyMasking(text, result)
 	}
-	return result, nil
+	return result
 }
 
 // dedupeDetections 去掉重叠的命中：多条规则命中同一片段时只保留最先出现、最长的一条，
@@ -515,11 +534,21 @@ func isAllowedValue(cfg *PrivacyMaskingConfig, value string) bool {
 }
 
 // MaskJSON 对 JSON 进行脱敏；脱敏后不再是合法 JSON 时返回错误（失败即阻断，绝不放行原文）
+// 启用智能检测时，L1 规则与 L2 旁路结果合并；旁路失败只会少了 L2 结果，不影响请求。
 func (s *PrivacyMaskingService) MaskJSON(ctx context.Context, data []byte) ([]byte, *MaskingResult, error) {
-	result, err := s.Mask(ctx, string(data))
+	cfg, rules, err := s.snapshot(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	if !cfg.Enabled {
+		return data, &MaskingResult{Masked: string(data)}, nil
+	}
+	text := string(data)
+	detections := detectWithRules(cfg, rules, text)
+	if cfg.SmartMaskingEnabled {
+		detections = append(detections, s.detectSmart(ctx, cfg, data)...)
+	}
+	result := s.buildMaskingResult(text, detections)
 	if len(result.Placeholders) == 0 {
 		return data, result, nil
 	}
@@ -633,6 +662,16 @@ func (s *PrivacyMaskingService) SaveConfig(ctx context.Context, cfg *PrivacyMask
 	}
 	if cfg.KindActions == nil {
 		cfg.KindActions = map[string]PrivacyMaskingAction{}
+	}
+	cfg.SmartSidecarURL = strings.TrimSpace(cfg.SmartSidecarURL)
+	if cfg.SmartTimeoutMS == 0 {
+		cfg.SmartTimeoutMS = DefaultSmartTimeoutMS
+	}
+	if cfg.SmartEntities == nil {
+		cfg.SmartEntities = []string{}
+	}
+	for i, kind := range cfg.SmartEntities {
+		cfg.SmartEntities[i] = normalizeSmartKind(kind)
 	}
 	if err := s.store.SaveGlobalConfig(ctx, cfg); err != nil {
 		return err
