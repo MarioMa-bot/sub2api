@@ -65,11 +65,51 @@ export default {
           label: '信用卡',
           description: '信用卡号',
         },
+        PERSON: {
+          label: '人名',
+          description: '人名（智能检测）',
+        },
+        LOCATION: {
+          label: '地点',
+          description: '城市、国家、地址等地点（智能检测）',
+        },
+        ORG: {
+          label: '机构',
+          description: '公司、组织机构名称（智能检测）',
+        },
+        NRP: {
+          label: '族群/宗教/政治',
+          description: '国籍、宗教、政治团体等（智能检测，误报较多）',
+        },
+        DATE_TIME: {
+          label: '日期时间',
+          description: '日期与时间（智能检测，误报较多）',
+        },
         CUSTOM: {
           label: '自定义',
           description: '自定义规则命中',
         },
       },
+    },
+
+    // 智能检测（Presidio 旁路）
+    smart: {
+      title: '智能检测 / Smart detection',
+      badge: '灰度',
+      description:
+        '在规则脱敏之外，调用 Presidio 旁路服务识别人名、地点、机构等实体，同样替换为占位符并在响应中恢复。仅扫描消息正文类字段，日志只记录类型与数量。',
+      url: '旁路服务地址',
+      urlHint: '留空时使用后端环境变量 PRIVACY_MASKING_SMART_URL；docker compose 默认地址为 http://privacy-ner:5002',
+      check: '检测连接',
+      checking: '检测中...',
+      checkOk: '连接正常：{url}（{ms} ms）',
+      checkFailed: '连接失败：{error}',
+      timeout: '超时（毫秒）',
+      timeoutHint: '单次请求的硬超时，建议 50~100 ms，默认 80 ms',
+      minScore: '置信度阈值',
+      minScoreHint: '0~1，低于阈值的实体不处理，默认 0.6',
+      entities: '实体类型与动作',
+      fallbackHint: '旁路超时、出错或未部署时自动降级为仅规则脱敏，请求不会因此失败。',
     },
 
     // 白名单

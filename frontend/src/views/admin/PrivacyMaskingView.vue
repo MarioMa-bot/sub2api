@@ -195,6 +195,100 @@
             </div>
           </div>
 
+          <!-- 智能检测（Presidio 旁路，灰度功能） -->
+          <div class="card space-y-4 border border-dashed border-gray-300 bg-gray-50/60 p-6 dark:border-dark-600 dark:bg-dark-800/40">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    {{ t('admin.privacyMasking.smart.title') }}
+                  </h2>
+                  <span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-600 dark:text-gray-300">
+                    {{ t('admin.privacyMasking.smart.badge') }}
+                  </span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('admin.privacyMasking.smart.description') }}
+                </p>
+              </div>
+              <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                <input v-model="config.smart_masking_enabled" type="checkbox" class="peer sr-only" />
+                <div
+                  class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-primary-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 dark:bg-gray-700 dark:peer-focus:ring-primary-800"
+                ></div>
+              </label>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-3">
+              <div class="md:col-span-3">
+                <label class="input-label">{{ t('admin.privacyMasking.smart.url') }}</label>
+                <div class="flex flex-wrap gap-3">
+                  <input
+                    v-model.trim="config.smart_sidecar_url"
+                    type="text"
+                    class="input min-w-[260px] flex-1 font-mono text-sm"
+                    placeholder="http://privacy-ner:5002"
+                  />
+                  <button type="button" class="btn btn-secondary" :disabled="smartChecking" @click="checkSmartSidecar">
+                    {{ smartChecking ? t('admin.privacyMasking.smart.checking') : t('admin.privacyMasking.smart.check') }}
+                  </button>
+                </div>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.privacyMasking.smart.urlHint') }}</p>
+                <p
+                  v-if="smartCheckResult"
+                  class="mt-1 text-xs"
+                  :class="smartCheckResult.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
+                >
+                  {{
+                    smartCheckResult.ok
+                      ? t('admin.privacyMasking.smart.checkOk', { url: smartCheckResult.url, ms: smartCheckResult.latency_ms })
+                      : t('admin.privacyMasking.smart.checkFailed', { error: smartCheckResult.error || '' })
+                  }}
+                </p>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.privacyMasking.smart.timeout') }}</label>
+                <input v-model.number="config.smart_timeout_ms" type="number" min="10" max="5000" step="10" class="input" />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.privacyMasking.smart.timeoutHint') }}</p>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.privacyMasking.smart.minScore') }}</label>
+                <input v-model.number="config.smart_min_score" type="number" min="0" max="1" step="0.05" class="input" />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.privacyMasking.smart.minScoreHint') }}</p>
+              </div>
+            </div>
+
+            <div>
+              <div class="input-label">{{ t('admin.privacyMasking.smart.entities') }}</div>
+              <div class="divide-y divide-gray-100 dark:divide-dark-700">
+                <div
+                  v-for="kind in smartKinds"
+                  :key="kind"
+                  class="flex flex-wrap items-center justify-between gap-3 py-3"
+                >
+                  <label class="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      :checked="config.smart_entities.includes(kind)"
+                      @change="toggleSmartEntity(kind, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <div>
+                      <div class="text-sm font-medium text-gray-900 dark:text-white">{{ kindLabel(kind) }}</div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ t(`admin.privacyMasking.actions.kinds.${kind}.description`) }}
+                      </div>
+                    </div>
+                  </label>
+                  <div class="w-40">
+                    <Select v-model="config.kind_actions[kind]" :options="actionOptions" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.privacyMasking.smart.fallbackHint') }}</p>
+          </div>
+
           <div class="flex justify-end gap-3">
             <button type="button" class="btn btn-secondary" :disabled="saving" @click="loadConfig">
               {{ t('common.reset') }}
@@ -462,6 +556,7 @@ import {
   type PrivacyMaskingConfig,
   type PrivacyMaskingEndpointSummary,
   type PrivacyMaskingLog,
+  type PrivacyMaskingSmartCheckResult,
   type PrivacyMaskingStats
 } from '@/api/admin'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -483,6 +578,9 @@ type TabValue = 'rules' | 'logs'
 
 // 内置规则支持的类型（ID_NUMBER 暂无内置规则，CUSTOM 由自定义规则产生）
 const builtinKinds = ['API_KEY', 'PRIVATE_KEY', 'TOKEN', 'PASSWORD', 'EMAIL', 'PHONE', 'CREDIT_CARD']
+// 智能检测（Presidio 旁路）可识别的实体类型
+const smartKinds = ['PERSON', 'LOCATION', 'ORG', 'NRP', 'DATE_TIME']
+const DEFAULT_SMART_ENTITIES = ['PERSON', 'LOCATION', 'ORG']
 
 const tabs = computed<{ value: TabValue; label: string }[]>(() => [
   { value: 'rules', label: t('admin.privacyMasking.tabs.rules') },
@@ -511,7 +609,12 @@ function emptyConfig(): PrivacyMaskingConfig {
     masked_kinds: {},
     custom_rules: [],
     allow_list: [],
-    kind_actions: {}
+    kind_actions: {},
+    smart_masking_enabled: false,
+    smart_sidecar_url: '',
+    smart_timeout_ms: 80,
+    smart_min_score: 0.6,
+    smart_entities: [...DEFAULT_SMART_ENTITIES]
   }
 }
 
@@ -527,8 +630,9 @@ function normalizeConfig(raw: PrivacyMaskingConfig): PrivacyMaskingConfig {
   cfg.kind_actions = { ...(raw.kind_actions || {}) }
   cfg.custom_rules = [...(raw.custom_rules || [])]
   cfg.allow_list = [...(raw.allow_list || [])]
+  cfg.smart_entities = [...(raw.smart_entities ?? DEFAULT_SMART_ENTITIES)]
   // 未配置的类型默认“脱敏”，让下拉框有明确取值
-  for (const kind of builtinKinds) {
+  for (const kind of [...builtinKinds, ...smartKinds]) {
     if (!cfg.kind_actions[kind]) cfg.kind_actions[kind] = 'mask'
   }
   return cfg
@@ -574,6 +678,27 @@ function toggleKind(kind: string, enabled: boolean) {
     delete config.value.masked_kinds[kind]
   } else {
     config.value.masked_kinds[kind] = false
+  }
+}
+
+function toggleSmartEntity(kind: string, enabled: boolean) {
+  const set = new Set(config.value.smart_entities)
+  if (enabled) set.add(kind)
+  else set.delete(kind)
+  config.value.smart_entities = smartKinds.filter((k) => set.has(k))
+}
+
+const smartChecking = ref(false)
+const smartCheckResult = ref<PrivacyMaskingSmartCheckResult | null>(null)
+
+async function checkSmartSidecar() {
+  smartChecking.value = true
+  try {
+    smartCheckResult.value = await adminAPI.privacyMasking.checkSmartSidecar(config.value.smart_sidecar_url)
+  } catch (err: any) {
+    smartCheckResult.value = { ok: false, url: config.value.smart_sidecar_url, latency_ms: 0, error: err?.message || String(err) }
+  } finally {
+    smartChecking.value = false
   }
 }
 
@@ -643,7 +768,7 @@ const endpointOptions = computed(() => {
 
 const kindOptions = computed(() => [
   { value: '', label: t('admin.privacyMasking.logs.filters.all') },
-  ...[...builtinKinds, 'CUSTOM'].map((kind) => ({ value: kind, label: kindLabel(kind) }))
+  ...[...builtinKinds, ...smartKinds, 'CUSTOM'].map((kind) => ({ value: kind, label: kindLabel(kind) }))
 ])
 
 const blockedOptions = computed(() => [

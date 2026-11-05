@@ -159,6 +159,92 @@ test@example.com
 动作：阻止
 ```
 
+## 智能脱敏（Presidio 旁路，可选）/ Smart detection
+
+规则脱敏（L1，正则，进程内 CPU）之外，可以再开启 L2 智能检测：后端把请求中**消息正文类字段**（`content`、`text`、`system`、`prompt`、`input`、`instructions`、`query` 下的字符串）送到 Presidio 旁路服务，识别人名、地点、机构等实体，然后用与规则相同的 `{{KIND_hash}}` 占位符替换，并在响应 / SSE 中恢复。`model`、`role`、工具名等字段不会送检，也不会被改写。
+
+- 实体类型 → 占位符类型：`PERSON`、`LOCATION`、`ORG`（默认启用），以及可选的 `NRP`（国籍/宗教/政治团体）、`DATE_TIME`（误报较多，默认关闭）。
+- 动作沿用「类型与动作」：在智能检测区块为每种实体选择 脱敏 / 仅警告 / 阻止请求。
+- 日志与规则命中写在同一张 `privacy_masking_log` 表里，`kinds` 中会出现 `PERSON` 等类型，**只记录类型、数量和长度，不记录原文**（这些类型不保留前缀）。
+- 规则命中与智能命中重叠时，规则结果优先。
+
+### 降级行为
+
+- 旁路的每次调用都有**硬超时**（默认 80 ms，可配 10~5000 ms）。超时、连接失败、HTTP 非 200、响应无法解析、地址未配置时，本次请求**静默降级为仅规则脱敏**，请求照常转发，不会因 NER 失败返回错误。
+- 降级时后端每 30 秒最多打一条 `smart detection unavailable, falling back to rules only` 警告日志。
+- 与规则脱敏不同：配置读取失败仍然按原逻辑返回 503（失败即阻断）；只有 NER 本身的失败才会降级。
+- 关闭「智能检测」开关时完全不调用旁路，行为与之前一致。
+
+### 本地启动
+
+**方式一：docker compose（推荐）**
+
+`deploy/docker-compose.dev.yml` 已包含 `privacy-ner` 服务，后端默认通过 `PRIVACY_MASKING_SMART_URL=http://privacy-ner:5002` 访问：
+
+```bash
+cd deploy
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml logs -f privacy-ner   # 看到 "privacy-ner listening" 即就绪（首次加载模型约 10~20 秒）
+```
+
+然后在 管理后台 → 隐私脱敏 → 规则配置 → 「智能检测 / Smart detection」：打开开关，地址留空（使用环境变量）或填写 `http://privacy-ner:5002`，点「检测连接」，保存。
+
+生产 compose（`deploy/docker-compose.yml`）中该服务放在 `smart-masking` profile 下，默认不启动：
+
+```bash
+cd deploy
+docker compose --profile smart-masking up -d --build
+```
+
+注意：`docker-compose.yml` 默认使用上游镜像 `weishaw/sub2api`，只有使用本 fork 构建的镜像才包含智能脱敏代码。
+
+**方式二：直接运行 Python（无 Docker）**
+
+```bash
+cd deploy/presidio
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python app.py                      # 默认监听 0.0.0.0:5002
+curl -s localhost:5002/health
+curl -s -X POST localhost:5002/analyze -H 'content-type: application/json' \
+  -d '{"text":"Ask John Smith in Seattle. 李明住在上海。"}'
+```
+
+后端启动时设置 `PRIVACY_MASKING_SMART_URL=http://127.0.0.1:5002`，或在管理后台填写地址。
+
+### 旁路 API
+
+- `GET /health` → `{"status":"ok","languages":["en","zh"]}`
+- `POST /analyze`，请求 `{"text": "...", "entities": ["PERSON","LOCATION","ORG"], "min_score": 0.6}`（`entities`、`min_score`、`language` 可选），响应 `[{"start":0,"end":10,"kind":"PERSON","score":0.85}]`。`start` / `end` 为 Unicode 码点偏移（左闭右开）。
+- 旁路只返回位置与类型，不记录、不保存请求文本。
+
+### 配置项
+
+| 位置 | 名称 | 默认值 | 说明 |
+|---|---|---|---|
+| 管理后台 | 智能检测开关 `smart_masking_enabled` | 关闭 | 总开关；保存后立即生效（其他实例 10 秒内） |
+| 管理后台 | 旁路服务地址 `smart_sidecar_url` | 空 | 为空时用环境变量 `PRIVACY_MASKING_SMART_URL` |
+| 管理后台 | 超时 `smart_timeout_ms` | 80 | 单次请求硬超时（10~5000） |
+| 管理后台 | 置信度阈值 `smart_min_score` | 0.6 | 0~1，低于阈值的实体忽略 |
+| 管理后台 | 实体类型 `smart_entities` | PERSON, LOCATION, ORG | 动作在同一区块设置 |
+| 后端环境变量 | `PRIVACY_MASKING_SMART_URL` | compose 中为 `http://privacy-ner:5002` | 后台地址留空时使用 |
+| 旁路环境变量 | `PRIVACY_NER_LANGUAGES` | `en,zh` | 加载的语言模型 |
+| 旁路环境变量 | `PRIVACY_NER_MIN_SCORE` | 0.5 | 旁路侧最低阈值（与后台阈值取较大者） |
+| 旁路环境变量 | `PRIVACY_NER_MAX_TEXT_CHARS` | 65536 | 单次分析的最大字符数 |
+| 旁路环境变量 | `PRIVACY_NER_PORT` | 5002 | 监听端口 |
+| compose 构建参数 | `PRIVACY_NER_PIP_INDEX_URL` | PyPI 官方源 | 国内可改为镜像源；spaCy 模型包仍从 GitHub Releases 下载 |
+
+配置保存在 `privacy_masking_config` 表（迁移 `252_privacy_masking_smart_detection.sql` 新增列），管理员 API 新增 `POST /api/v1/admin/privacy-masking/smart/check`（检测旁路连通性，`url` 为空时检测已保存地址）。
+
+### 模型与限制
+
+- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 850 MB，常驻内存约 450 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
+- 小模型准确率有限：中文人名、少见地名、英文小写人名都可能漏检；也可能把普通词误判为机构。需要更高准确率时可把 `PRIVACY_NER_EN_MODEL` / `PRIVACY_NER_ZH_MODEL` 换成 `*_lg` 模型（需自行修改 `requirements.txt`，延迟和内存会上升，相应调大超时）。
+- 每次请求最多送检约 32 KB 文本，超出时优先保留最新的消息；更早的长对话历史只做规则脱敏。
+- 实体在原始 JSON 中按「UTF-8 原文」和「`\uXXXX` 转义」两种编码查找；其他罕见编码形式会漏掉（只影响 L2，不影响规则）。
+- 英文实体要求两侧不是字母数字（避免 `Ann` 命中 `Annual`）；中文实体按子串匹配。
+- 旁路超时会直接放弃这次的智能结果，不会重试。
+
 ## Docker 部署
 
 ### 完整部署步骤
@@ -299,6 +385,7 @@ GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 ⚠️ **通用长串规则**：32 位以上字母数字串（如哈希）也会被视为 API_KEY 脱敏；紧邻 `+ / =` 的 base64 片段会被跳过
 ⚠️ **上游缓存**：如果上游缓存了占位符响应，需要清除缓存
 ⚠️ **规则完整性**：内置规则无法覆盖所有情况，可能有漏检
+⚠️ **智能检测**：依赖 NER 模型，可能漏检或误报；旁路超时 / 不可用时只做规则脱敏（见「智能脱敏」）
 
 ### 最佳实践
 
@@ -387,7 +474,9 @@ GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 - `backend/internal/service/privacy_masking_middleware.go` - 中间件
 - `backend/internal/repository/privacy_masking_repo.go` - 数据访问
 - `backend/internal/handler/admin/privacy_masking_handler.go` - API 处理器
-- `backend/migrations/250_privacy_masking.sql` - 数据库迁移
+- `backend/internal/service/privacy_masking_smart.go` - 智能检测（Presidio 旁路客户端、字段提取、降级）
+- `backend/migrations/250_privacy_masking.sql`、`251_*`、`252_privacy_masking_smart_detection.sql` - 数据库迁移
+- `deploy/presidio/` - Presidio 旁路服务（app.py、Dockerfile、requirements.txt）
 
 **前端**：
 - `frontend/src/views/admin/PrivacyMaskingView.vue` - 管理界面
@@ -399,6 +488,7 @@ GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 - `GET /api/v1/admin/privacy-masking/logs` - 分页查询日志（支持接口、类型、结果、时间等过滤）
 - `GET /api/v1/admin/privacy-masking/logs/endpoints` - 按 API 接口聚合
 - `GET /api/v1/admin/privacy-masking/stats` - 统计概览
+- `POST /api/v1/admin/privacy-masking/smart/check` - 检测智能脱敏旁路连通性
 
 ## 参考
 

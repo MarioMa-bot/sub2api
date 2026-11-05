@@ -22,6 +22,12 @@ export interface PrivacyMaskingConfig {
   custom_rules: PrivacyMaskingRule[]
   allow_list: string[]
   kind_actions: Record<string, PrivacyMaskingAction>
+  // 智能脱敏（Presidio 旁路）：超时或不可用时自动降级为仅规则脱敏
+  smart_masking_enabled: boolean
+  smart_sidecar_url: string
+  smart_timeout_ms: number
+  smart_min_score: number
+  smart_entities: string[]
   updated_at?: string
   updated_by_user_id?: number
 }
@@ -114,12 +120,26 @@ export async function getStats(since?: string): Promise<PrivacyMaskingStats> {
   return data
 }
 
+export interface PrivacyMaskingSmartCheckResult {
+  ok: boolean
+  url: string
+  latency_ms: number
+  error?: string
+}
+
+/** 检测智能脱敏旁路是否可达；url 为空时检测已保存的地址（或环境变量） */
+export async function checkSmartSidecar(url?: string): Promise<PrivacyMaskingSmartCheckResult> {
+  const { data } = await apiClient.post('/admin/privacy-masking/smart/check', { url: url || '' })
+  return data
+}
+
 export const privacyMaskingAPI = {
   getConfig,
   updateConfig,
   listLogs,
   listEndpoints,
-  getStats
+  getStats,
+  checkSmartSidecar
 }
 
 export default privacyMaskingAPI

@@ -90,6 +90,92 @@ Sub2API 的隐私脱敏功能可以在请求发送到上游 API 提供商之前�
 2. **警告（Warn）**：记录日志但不脱敏，请求正常发送
 3. **阻止（Block）**：检测到后直接拒绝请求
 
+### 智能脱敏（Presidio 旁路，可选）/ Smart detection
+
+规则脱敏（L1，正则，进程内 CPU）之外，可以再开启 L2 智能检测：后端把请求中**消息正文类字段**（`content`、`text`、`system`、`prompt`、`input`、`instructions`、`query` 下的字符串）送到 Presidio 旁路服务，识别人名、地点、机构等实体，然后用与规则相同的 `{{KIND_hash}}` 占位符替换，并在响应 / SSE 中恢复。`model`、`role`、工具名等字段不会送检，也不会被改写。
+
+- 实体类型 → 占位符类型：`PERSON`、`LOCATION`、`ORG`（默认启用），以及可选的 `NRP`（国籍/宗教/政治团体）、`DATE_TIME`（误报较多，默认关闭）。
+- 动作沿用「类型与动作」：在智能检测区块为每种实体选择 脱敏 / 仅警告 / 阻止请求。
+- 日志与规则命中写在同一张 `privacy_masking_log` 表里，`kinds` 中会出现 `PERSON` 等类型，**只记录类型、数量和长度，不记录原文**（这些类型不保留前缀）。
+- 规则命中与智能命中重叠时，规则结果优先。
+
+#### 降级行为
+
+- 旁路的每次调用都有**硬超时**（默认 80 ms，可配 10~5000 ms）。超时、连接失败、HTTP 非 200、响应无法解析、地址未配置时，本次请求**静默降级为仅规则脱敏**，请求照常转发，不会因 NER 失败返回错误。
+- 降级时后端每 30 秒最多打一条 `smart detection unavailable, falling back to rules only` 警告日志。
+- 与规则脱敏不同：配置读取失败仍然按原逻辑返回 503（失败即阻断）；只有 NER 本身的失败才会降级。
+- 关闭「智能检测」开关时完全不调用旁路，行为与之前一致。
+
+#### 本地启动
+
+**方式一：docker compose（推荐）**
+
+`deploy/docker-compose.dev.yml` 已包含 `privacy-ner` 服务，后端默认通过 `PRIVACY_MASKING_SMART_URL=http://privacy-ner:5002` 访问：
+
+```bash
+cd deploy
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml logs -f privacy-ner   # 看到 "privacy-ner listening" 即就绪（首次加载模型约 10~20 秒）
+```
+
+然后在 管理后台 → 隐私脱敏 → 规则配置 → 「智能检测 / Smart detection」：打开开关，地址留空（使用环境变量）或填写 `http://privacy-ner:5002`，点「检测连接」，保存。
+
+生产 compose（`deploy/docker-compose.yml`）中该服务放在 `smart-masking` profile 下，默认不启动：
+
+```bash
+cd deploy
+docker compose --profile smart-masking up -d --build
+```
+
+注意：`docker-compose.yml` 默认使用上游镜像 `weishaw/sub2api`，只有使用本 fork 构建的镜像才包含智能脱敏代码。
+
+**方式二：直接运行 Python（无 Docker）**
+
+```bash
+cd deploy/presidio
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python app.py                      # 默认监听 0.0.0.0:5002
+curl -s localhost:5002/health
+curl -s -X POST localhost:5002/analyze -H 'content-type: application/json' \
+  -d '{"text":"Ask John Smith in Seattle. 李明住在上海。"}'
+```
+
+后端启动时设置 `PRIVACY_MASKING_SMART_URL=http://127.0.0.1:5002`，或在管理后台填写地址。
+
+#### 旁路 API
+
+- `GET /health` → `{"status":"ok","languages":["en","zh"]}`
+- `POST /analyze`，请求 `{"text": "...", "entities": ["PERSON","LOCATION","ORG"], "min_score": 0.6}`（`entities`、`min_score`、`language` 可选），响应 `[{"start":0,"end":10,"kind":"PERSON","score":0.85}]`。`start` / `end` 为 Unicode 码点偏移（左闭右开）。
+- 旁路只返回位置与类型，不记录、不保存请求文本。
+
+#### 配置项
+
+| 位置 | 名称 | 默认值 | 说明 |
+|---|---|---|---|
+| 管理后台 | 智能检测开关 `smart_masking_enabled` | 关闭 | 总开关；保存后立即生效（其他实例 10 秒内） |
+| 管理后台 | 旁路服务地址 `smart_sidecar_url` | 空 | 为空时用环境变量 `PRIVACY_MASKING_SMART_URL` |
+| 管理后台 | 超时 `smart_timeout_ms` | 80 | 单次请求硬超时（10~5000） |
+| 管理后台 | 置信度阈值 `smart_min_score` | 0.6 | 0~1，低于阈值的实体忽略 |
+| 管理后台 | 实体类型 `smart_entities` | PERSON, LOCATION, ORG | 动作在同一区块设置 |
+| 后端环境变量 | `PRIVACY_MASKING_SMART_URL` | compose 中为 `http://privacy-ner:5002` | 后台地址留空时使用 |
+| 旁路环境变量 | `PRIVACY_NER_LANGUAGES` | `en,zh` | 加载的语言模型 |
+| 旁路环境变量 | `PRIVACY_NER_MIN_SCORE` | 0.5 | 旁路侧最低阈值（与后台阈值取较大者） |
+| 旁路环境变量 | `PRIVACY_NER_MAX_TEXT_CHARS` | 65536 | 单次分析的最大字符数 |
+| 旁路环境变量 | `PRIVACY_NER_PORT` | 5002 | 监听端口 |
+| compose 构建参数 | `PRIVACY_NER_PIP_INDEX_URL` | PyPI 官方源 | 国内可改为镜像源；spaCy 模型包仍从 GitHub Releases 下载 |
+
+配置保存在 `privacy_masking_config` 表（迁移 `252_privacy_masking_smart_detection.sql` 新增列），管理员 API 新增 `POST /api/v1/admin/privacy-masking/smart/check`（检测旁路连通性，`url` 为空时检测已保存地址）。
+
+#### 模型与限制
+
+- 使用 Presidio Analyzer 2.2 + spaCy 小模型 `en_core_web_sm`、`zh_core_web_sm`（纯 CPU，镜像约 850 MB，常驻内存约 450 MB）。中英混排文本会两种模型各跑一次再合并，单次约 5~15 ms。
+- 小模型准确率有限：中文人名、少见地名、英文小写人名都可能漏检；也可能把普通词误判为机构。需要更高准确率时可把 `PRIVACY_NER_EN_MODEL` / `PRIVACY_NER_ZH_MODEL` 换成 `*_lg` 模型（需自行修改 `requirements.txt`，延迟和内存会上升，相应调大超时）。
+- 每次请求最多送检约 32 KB 文本，超出时优先保留最新的消息；更早的长对话历史只做规则脱敏。
+- 实体在原始 JSON 中按「UTF-8 原文」和「`\uXXXX` 转义」两种编码查找；其他罕见编码形式会漏掉（只影响 L2，不影响规则）。
+- 英文实体要求两侧不是字母数字（避免 `Ann` 命中 `Annual`）；中文实体按子串匹配。
+- 旁路超时会直接放弃这次的智能结果，不会重试。
+
 ### Docker 部署
 
 #### 完整部署步骤
@@ -282,6 +368,38 @@ For each type of sensitive data, configure one of three actions:
 1. **Mask**: Replace with placeholder, request proceeds normally
 2. **Warn**: Log but don't mask, request proceeds normally
 3. **Block**: Reject request immediately when detected
+
+### Smart Detection (Presidio sidecar, optional)
+
+On top of rule masking (L1, regex, in-process), you can enable L2 smart detection. The backend sends strings under **message text fields** (`content`, `text`, `system`, `prompt`, `input`, `instructions`, `query`) to a Presidio sidecar. Detected person / location / organization entities are replaced with the same `{{KIND_hash}}` placeholders and restored in responses and SSE. Fields such as `model`, `role` or tool names are never sent or rewritten.
+
+- Kinds: `PERSON`, `LOCATION`, `ORG` (enabled by default), plus optional `NRP` and `DATE_TIME` (noisy, off by default). Actions (mask / warn / block) are set per kind in the same section.
+- Logs go to the same `privacy_masking_log` table with kinds such as `PERSON`. **Only kinds, counts and lengths are stored, never the text.**
+- When a rule hit and a smart hit overlap, the rule wins.
+
+**Degradation.** Every sidecar call has a hard timeout (default 80 ms, 10–5000 ms). On timeout, connection error, non-200, bad response or missing URL, that request silently falls back to rules-only and is forwarded normally. NER failures never fail a request. A warning is logged at most every 30 s. With the switch off, the sidecar is never called and behavior is unchanged.
+
+**Run locally with compose:**
+
+```bash
+cd deploy
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml logs -f privacy-ner   # ready when "privacy-ner listening" appears
+```
+
+Then go to Admin → Privacy Masking → Rules → "Smart detection / 智能检测". Turn it on, leave the URL empty (uses `PRIVACY_MASKING_SMART_URL=http://privacy-ner:5002` from compose) and click "Test connection", then save. In production `deploy/docker-compose.yml` the sidecar sits behind the `smart-masking` profile: `docker compose --profile smart-masking up -d --build`. The default image `weishaw/sub2api` is upstream and does not contain this fork's code.
+
+**Without Docker:** `cd deploy/presidio && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && python app.py`. Then start the backend with `PRIVACY_MASKING_SMART_URL=http://127.0.0.1:5002`.
+
+**Sidecar API:** `GET /health`; `POST /analyze {"text": "...", "entities": [...], "min_score": 0.6}` → `[{"start", "end", "kind", "score"}]`. Offsets are Unicode code points (end exclusive). The sidecar never logs or stores text.
+
+**Settings:** admin UI fields `smart_masking_enabled`, `smart_sidecar_url`, `smart_timeout_ms` (80), `smart_min_score` (0.6) and `smart_entities`, added by migration `252_privacy_masking_smart_detection.sql`. Backend env var `PRIVACY_MASKING_SMART_URL`. Sidecar env vars `PRIVACY_NER_LANGUAGES` (`en,zh`), `PRIVACY_NER_MIN_SCORE` (0.5), `PRIVACY_NER_MAX_TEXT_CHARS` (65536) and `PRIVACY_NER_PORT` (5002). Compose build arg `PRIVACY_NER_PIP_INDEX_URL`. New admin API: `POST /api/v1/admin/privacy-masking/smart/check`.
+
+**Limits:**
+- spaCy small models (`en_core_web_sm`, `zh_core_web_sm`) on CPU: about 850 MB image and ~450 MB RAM, 5–15 ms per call. Mixed zh/en text runs both models.
+- Small models miss some names (especially Chinese ones) and may produce false positives. Switch to `*_lg` models for accuracy, at the cost of latency and memory.
+- At most about 32 KB of text per request is scanned, newest messages first; older history gets rule masking only.
+- Entities are matched in the raw JSON as UTF-8 text or `\uXXXX` escapes only.
 
 ### Docker Deployment
 

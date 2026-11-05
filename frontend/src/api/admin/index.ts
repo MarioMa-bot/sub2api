@@ -126,6 +126,7 @@ export type {
   PrivacyMaskingLog,
   PrivacyMaskingLogQuery,
   PrivacyMaskingRule,
+  PrivacyMaskingSmartCheckResult,
   PrivacyMaskingStats
 } from './privacyMasking'
 export type { BalanceHistoryItem } from './users'

@@ -21,7 +21,7 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 ---
 
 > **🔐 Fork Feature: Server-Side Privacy Masking**  
-> This fork adds automatic detection and masking of sensitive data (API keys, tokens, PII) in all relay traffic before forwarding to upstream providers. Admins can configure rules, allowlists, and per-kind actions (mask/warn/block) via the web UI. Placeholders are restored in responses and SSE streams.  
+> This fork adds automatic detection and masking of sensitive data (API keys, tokens, PII) in all relay traffic before forwarding to upstream providers. Admins can configure rules, allowlists, and per-kind actions (mask/warn/block) via the web UI. Placeholders are restored in responses and SSE streams. Optional smart detection (Presidio sidecar) also masks names, locations and organizations, falling back to rules-only if the sidecar is slow or down.  
 > 📖 **Documentation**: [English](PRIVACY_MASKING.md) | [中文](PRIVACY_MASKING.zh-CN.md)
 
 ---

@@ -15,7 +15,9 @@ func TestPrivacyMaskingRepository_ConfigAndLogs(t *testing.T) {
 	ctx := context.Background()
 	_, err := integrationDB.ExecContext(ctx, `TRUNCATE privacy_masking_log`)
 	require.NoError(t, err)
-	_, err = integrationDB.ExecContext(ctx, `UPDATE privacy_masking_config SET enabled = false, kind_actions = '{}', allow_list = '[]', custom_rules = '[]' WHERE group_id IS NULL`)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE privacy_masking_config SET enabled = false, kind_actions = '{}', allow_list = '[]', custom_rules = '[]',
+    smart_masking_enabled = false, smart_sidecar_url = '', smart_timeout_ms = 80, smart_min_score = 0.6, smart_entities = '["PERSON","LOCATION","ORG"]'
+WHERE group_id IS NULL`)
 	require.NoError(t, err)
 	repo := NewPrivacyMaskingRepository(integrationDB)
 
@@ -23,6 +25,9 @@ func TestPrivacyMaskingRepository_ConfigAndLogs(t *testing.T) {
 	cfg, err := repo.GetGlobalConfig(ctx)
 	require.NoError(t, err)
 	require.False(t, cfg.Enabled)
+	require.False(t, cfg.SmartMaskingEnabled)
+	require.Equal(t, 80, cfg.SmartTimeoutMS)
+	require.Equal(t, []string{"PERSON", "LOCATION", "ORG"}, cfg.SmartEntities)
 
 	adminID := int64(1)
 	cfg.Enabled = true
@@ -30,6 +35,11 @@ func TestPrivacyMaskingRepository_ConfigAndLogs(t *testing.T) {
 	cfg.AllowList = []string{"sk-allowed"}
 	cfg.CustomRules = []service.PrivacyMaskingRule{{Pattern: `secret-\w+`, Kind: "INTERNAL", Action: service.PrivacyMaskingActionMask}}
 	cfg.UpdatedByUserID = &adminID
+	cfg.SmartMaskingEnabled = true
+	cfg.SmartSidecarURL = "http://privacy-ner:5002"
+	cfg.SmartTimeoutMS = 120
+	cfg.SmartMinScore = 0.75
+	cfg.SmartEntities = []string{"PERSON"}
 	require.NoError(t, repo.SaveGlobalConfig(ctx, cfg))
 
 	saved, err := repo.GetGlobalConfig(ctx)
@@ -39,6 +49,11 @@ func TestPrivacyMaskingRepository_ConfigAndLogs(t *testing.T) {
 	require.Equal(t, []string{"sk-allowed"}, saved.AllowList)
 	require.Len(t, saved.CustomRules, 1)
 	require.Equal(t, adminID, *saved.UpdatedByUserID)
+	require.True(t, saved.SmartMaskingEnabled)
+	require.Equal(t, "http://privacy-ner:5002", saved.SmartSidecarURL)
+	require.Equal(t, 120, saved.SmartTimeoutMS)
+	require.InDelta(t, 0.75, saved.SmartMinScore, 1e-9)
+	require.Equal(t, []string{"PERSON"}, saved.SmartEntities)
 
 	keyID, groupID := int64(42), int64(9)
 	now := time.Now().UTC()
