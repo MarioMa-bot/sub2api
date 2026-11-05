@@ -1,15 +1,21 @@
 export default {
   privacyMasking: {
     title: 'Privacy Masking',
-    description: 'Auto-detect and mask sensitive data before sending to upstream',
-    
+    description: 'Auto-detect and mask sensitive data before sending to upstream, with masking logs per API endpoint',
+
+    // Tabs
+    tabs: {
+      rules: 'Rules',
+      logs: 'Masking Logs',
+    },
+
     // Global toggle
     enabled: {
       title: 'Enable Privacy Masking',
       description: 'Auto-detect and mask sensitive data before sending to upstream',
-      hint: 'When disabled, all masking rules stop working and requests are forwarded directly',
+      hint: 'When disabled, all masking rules stop working and requests are forwarded directly. Changes apply immediately after saving.',
     },
-    
+
     // Basic settings
     basic: {
       title: 'Basic Settings',
@@ -22,11 +28,11 @@ export default {
         description: 'Auto-detect and mask emails, phone numbers, credit cards',
       },
     },
-    
+
     // Action settings
     actions: {
-      title: 'Action Settings',
-      description: 'Configure different actions for each type of sensitive data',
+      title: 'Types & Actions',
+      description: 'Choose which types to detect and the action for each: mask and forward, warn only (forward original), or block the request',
       mask: 'Mask (Recommended)',
       warn: 'Warn Only',
       block: 'Block Request',
@@ -59,39 +65,78 @@ export default {
           label: 'Credit Cards',
           description: 'Credit card numbers',
         },
+        CUSTOM: {
+          label: 'Custom',
+          description: 'Matched by a custom rule',
+        },
       },
     },
-    
+
     // Allow list
     allowList: {
       title: 'Allow List',
-      description: 'These values will never be masked (one per line, exact match)',
-      placeholder: 'example-key-12345\ntest@example.com\n+1234567890',
+      description: 'These values will never be masked (one per line, exact match, case-insensitive)',
+      placeholder: "example-key-12345\ntest{'@'}example.com\n+1234567890",
       hint: 'Add known safe values like test keys',
     },
-    
+
     // Custom rules
     customRules: {
       title: 'Custom Rules',
-      description: 'Define custom masking rules using regular expressions',
+      description: 'Define custom masking rules using regular expressions; with capture groups only the first group is replaced',
       pattern: 'Regular Expression',
       action: 'Action',
       add: '+ Add Rule',
       remove: 'Remove',
       patternPlaceholder: 'e.g. secret-[a-zA-Z0-9]+',
+      kindPlaceholder: 'Kind, e.g. CUSTOM',
     },
-    
+
     // Logs
     logs: {
-      title: 'Recent Masking Logs',
+      title: 'Masking Logs',
       refresh: 'Refresh',
       empty: 'No masking logs yet',
+      disabledHint: 'Privacy masking is currently disabled, so the gateway produces no new masking logs. Enable it on the Rules tab.',
+      unknownEndpoint: '(unknown endpoint)',
+      endpoints: {
+        title: 'By API Endpoint',
+        hint: 'Click a row to filter logs by that endpoint',
+        events: 'Events',
+        blocked: 'Blocked',
+        detected: 'Values hit',
+        lastSeen: 'Last seen',
+      },
+      stats: {
+        events: 'Masking events',
+        blocked: 'Blocked requests',
+        masked: 'Values masked',
+        warned: 'Values warned',
+      },
+      filters: {
+        all: 'All',
+        allEndpoints: 'All endpoints',
+        endpoint: 'API endpoint',
+        kind: 'Type',
+        result: 'Result',
+        model: 'Model',
+        userId: 'User ID',
+        apiKeyId: 'API Key ID',
+      },
       columns: {
         time: 'Time',
+        endpoint: 'Endpoint / Model',
+        caller: 'Caller',
         kinds: 'Types',
         count: 'Count',
-        action: 'Action',
+        action: 'Handling',
         status: 'Status',
+        requestId: 'Request ID',
+      },
+      caller: {
+        user: 'User',
+        apiKey: 'Key',
+        group: 'Group',
       },
       actions: {
         masked: 'Masked',
@@ -103,29 +148,30 @@ export default {
         passed: 'Passed',
       },
     },
-    
+
     // Buttons
     buttons: {
       save: 'Save Configuration',
       saving: 'Saving...',
     },
-    
+
     // Messages
     messages: {
       saveSuccess: 'Configuration saved',
       saveError: 'Failed to save',
       loadError: 'Failed to load configuration',
+      loadLogsError: 'Failed to load masking logs',
     },
-    
+
     // Help text
     help: {
       howItWorks: {
         title: 'How It Works',
-        description: 'Masking feature automatically detects and replaces sensitive data with placeholders (like {{API_KEY_hash}}) before sending to upstream API. Original values are restored when responses return. Raw values are stored in memory only, never written to disk.',
+        description: "Masking feature automatically detects and replaces sensitive data with placeholders (like {'{{'}API_KEY_hash{'}}'}) before sending to upstream API. Original values are restored when responses return. Raw values are stored in memory only, never written to disk.",
       },
       placeholders: {
         title: 'Placeholder Format',
-        description: 'Sensitive values are replaced with {{KIND_hash}} format placeholders, e.g. {{API_KEY_a3b4c5d6}}. Same value always generates same placeholder to ensure context consistency.',
+        description: "Sensitive values are replaced with {'{{'}KIND_hash{'}}'} format placeholders, e.g. {'{{'}API_KEY_a3b4c5d6{'}}'}. Same value always generates same placeholder to ensure context consistency.",
       },
       safety: {
         title: 'Safety First',

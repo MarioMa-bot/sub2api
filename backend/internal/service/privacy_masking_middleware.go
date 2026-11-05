@@ -4,146 +4,232 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
+
+// privacyMaskingLogTimeout 异步写日志的超时时间
+const privacyMaskingLogTimeout = 5 * time.Second
+
+// privacyMaskingMaxPlaceholderLen 流式输出时最多暂存的未闭合占位符长度
+const privacyMaskingMaxPlaceholderLen = 64
+
+const privacyMaskingFieldMaxLen = 255
+
+// partialPlaceholderPattern 判断末尾片段是否可能是被拆开的占位符
+var partialPlaceholderPattern = regexp.MustCompile(`^\{\{[A-Za-z0-9_]*\}?$`)
+
+// PrivacyMaskingIdentity 请求的调用方身份（用于日志）
+type PrivacyMaskingIdentity struct {
+	UserID   int64
+	APIKeyID *int64
+	GroupID  *int64
+}
+
+// PrivacyMaskingIdentityResolver 从请求上下文解析调用方身份。
+// service 包不能依赖 server/middleware，因此由路由层注入。
+type PrivacyMaskingIdentityResolver func(c *gin.Context) PrivacyMaskingIdentity
 
 // PrivacyMaskingMiddleware 隐私脱敏中间件
 type PrivacyMaskingMiddleware struct {
 	service *PrivacyMaskingService
-	logger  *zap.Logger
+	// logWriter 写日志的执行方式；默认异步，测试可替换为同步
+	logWriter func(fn func())
 }
 
 // NewPrivacyMaskingMiddleware 创建中间件实例
-func NewPrivacyMaskingMiddleware(service *PrivacyMaskingService, logger *zap.Logger) *PrivacyMaskingMiddleware {
+func NewPrivacyMaskingMiddleware(service *PrivacyMaskingService) *PrivacyMaskingMiddleware {
 	return &PrivacyMaskingMiddleware{
-		service: service,
-		logger:  logger,
+		service:   service,
+		logWriter: func(fn func()) { go fn() },
 	}
 }
 
-// contextKey 用于存储脱敏上下文的键
-type contextKey string
-
-const (
-	maskingContextKey contextKey = "privacy_masking_context"
-)
-
-// maskingContext 脱敏上下文（在请求生命周期中传递）
-type maskingContext struct {
-	enabled      bool
-	shouldBlock  bool
-	result       *MaskingResult
-}
-
-// MaskRequest 脱敏请求中间件
-func (m *PrivacyMaskingMiddleware) MaskRequest() gin.HandlerFunc {
+// Handler 网关脱敏中间件：
+//  1. 请求转发前把 JSON 请求体中的敏感值替换为 {{KIND_hash}} 占位符；
+//  2. 命中任何规则（mask/warn/block）都写一条仅含元数据的日志；
+//  3. 命中 block 规则或脱敏失败时直接 403 阻断，绝不放行原文；
+//  4. 响应（含 SSE 流）边写边把本次请求产生的占位符恢复为原始值。
+//
+// 只检查 JSON 请求体；multipart、二进制等非 JSON 请求原样放行。
+func (m *PrivacyMaskingMiddleware) Handler(resolve PrivacyMaskingIdentityResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查是否启用脱敏
-		config, err := m.service.LoadConfig(c.Request.Context())
+		if m == nil || m.service == nil || c.Request.Body == nil {
+			c.Next()
+			return
+		}
+		switch c.Request.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+		default:
+			c.Next()
+			return
+		}
+
+		cfg, err := m.service.LoadConfig(c.Request.Context())
 		if err != nil {
-			m.logger.Error("Failed to load masking config", zap.Error(err))
+			logger.L().Error("privacy masking: load config failed", zap.Error(err))
+			abortPrivacyMasking(c, http.StatusServiceUnavailable, "privacy_masking_unavailable", "Privacy masking is unavailable, request rejected for safety")
+			return
+		}
+		if !cfg.Enabled {
 			c.Next()
 			return
 		}
 
-		if !config.Enabled {
-			c.Next()
-			return
-		}
-
-		// 只处理 POST/PUT/PATCH 请求
-		if c.Request.Method != http.MethodPost && 
-		   c.Request.Method != http.MethodPut && 
-		   c.Request.Method != http.MethodPatch {
-			c.Next()
-			return
-		}
-
-		// 读取请求体
-		bodyBytes, err := io.ReadAll(c.Request.Body)
+		body, err := io.ReadAll(c.Request.Body)
+		_ = c.Request.Body.Close()
 		if err != nil {
-			m.logger.Error("Failed to read request body for masking", zap.Error(err))
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				abortPrivacyMasking(c, http.StatusRequestEntityTooLarge, "request_too_large", "Request body too large")
+				return
+			}
+			abortPrivacyMasking(c, http.StatusBadRequest, "privacy_masking_error", "Failed to read request body")
+			return
+		}
+		setRequestBody(c, body)
+		if len(body) == 0 || !json.Valid(body) {
 			c.Next()
 			return
 		}
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-		// 检测并脱敏
-		maskedBody, result, err := m.service.MaskJSON(c.Request.Context(), bodyBytes)
-		if err != nil {
-			m.logger.Error("Failed to mask request body", zap.Error(err))
-			// 如果脱敏失败，阻止请求（安全优先）
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": gin.H{
-					"type":    "privacy_masking_error",
-					"message": "Request masking failed for security reasons",
-				},
-			})
-			c.Abort()
+		masked, result, maskErr := m.service.MaskJSON(c.Request.Context(), body)
+		if result != nil && len(result.Detections) > 0 {
+			blocked := maskErr != nil || result.ShouldBlock
+			m.recordLog(c, resolve, body, result, blocked)
+		}
+		if maskErr != nil {
+			logger.L().Error("privacy masking: mask request failed", zap.Error(maskErr), zap.String("path", c.Request.URL.Path))
+			abortPrivacyMasking(c, http.StatusForbidden, "privacy_masking_error", "Request masking failed for security reasons")
 			return
 		}
-
-		// 如果需要阻止请求
 		if result.ShouldBlock {
-			m.logger.Warn("Request blocked by privacy masking",
+			logger.L().Warn("privacy masking: request blocked",
+				zap.String("path", c.Request.URL.Path),
 				zap.Int("blocked_count", result.BlockedCount),
-				zap.Strings("detections", extractKinds(result.Detections)))
-
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": gin.H{
-					"type":    "privacy_masking_blocked",
-					"message": "Request contains blocked sensitive information",
-				},
-			})
-			c.Abort()
+				zap.Strings("kinds", extractKinds(result.Detections)))
+			abortPrivacyMasking(c, http.StatusForbidden, "privacy_masking_blocked", "Request contains blocked sensitive information")
+			return
+		}
+		if len(result.Placeholders) == 0 {
+			c.Next()
 			return
 		}
 
-		// 如果有警告
-		if result.HasWarnings {
-			m.logger.Warn("Request contains sensitive information (warning only)",
-				zap.Int("warned_count", result.WarnedCount),
-				zap.Strings("detections", extractKinds(result.Detections)))
-		}
-
-		// 替换请求体
-		if result.MaskedCount > 0 {
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(maskedBody))
-			c.Request.ContentLength = int64(len(maskedBody))
-			m.logger.Debug("Request body masked",
-				zap.Int("masked_count", result.MaskedCount),
-				zap.Strings("kinds", extractKinds(result.Detections)))
-		}
-
-		// 存储脱敏上下文
-		ctx := &maskingContext{
-			enabled:     true,
-			shouldBlock: result.ShouldBlock,
-			result:      result,
-		}
-		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), maskingContextKey, ctx))
-
+		setRequestBody(c, masked)
+		writer := &unmaskingResponseWriter{ResponseWriter: c.Writer, placeholders: result.Placeholders}
+		c.Writer = writer
+		defer func() {
+			writer.finish()
+			c.Writer = writer.ResponseWriter
+		}()
 		c.Next()
 	}
 }
 
-// UnmaskResponse 恢复响应中间件（需要在写入响应前调用）
+func setRequestBody(c *gin.Context, body []byte) {
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.ContentLength = int64(len(body))
+}
+
+func abortPrivacyMasking(c *gin.Context, status int, errType, message string) {
+	c.AbortWithStatusJSON(status, gin.H{
+		"error": gin.H{"type": errType, "message": message},
+	})
+}
+
+// recordLog 写入脱敏日志（仅元数据，不含原始值）
+func (m *PrivacyMaskingMiddleware) recordLog(c *gin.Context, resolve PrivacyMaskingIdentityResolver, body []byte, result *MaskingResult, blocked bool) {
+	entry := BuildPrivacyMaskingLog(result)
+	if entry == nil {
+		return
+	}
+	entry.RequestBlocked = blocked
+	if resolve != nil {
+		identity := resolve(c)
+		entry.UserID, entry.APIKeyID, entry.GroupID = identity.UserID, identity.APIKeyID, identity.GroupID
+	}
+	if requestID, ok := c.Request.Context().Value(ctxkey.ClientRequestID).(string); ok {
+		entry.RequestID = truncatePrivacyField(requestID)
+	}
+	entry.Endpoint, entry.Model = privacyMaskingEndpointAndModel(c, body)
+
+	m.logWriter(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), privacyMaskingLogTimeout)
+		defer cancel()
+		if err := m.service.LogMasking(ctx, entry); err != nil {
+			logger.L().Error("privacy masking: write log failed", zap.Error(err), zap.String("endpoint", entry.Endpoint))
+		}
+	})
+}
+
+// privacyMaskingEndpointAndModel 生成用于分组的 API 接口名及模型名。
+// 带路径参数的路由使用路由模板（避免 ID 打散分组）；Gemini 的 /models/{model}:{action} 归一为 {model} 占位。
+func privacyMaskingEndpointAndModel(c *gin.Context, body []byte) (string, string) {
+	model := gjson.GetBytes(body, "model").String()
+	endpoint := c.Request.URL.Path
+	fullPath := c.FullPath()
+	if modelAction := strings.TrimPrefix(c.Param("modelAction"), "/"); modelAction != "" {
+		name, action, _ := strings.Cut(modelAction, ":")
+		if model == "" {
+			model = name
+		}
+		endpoint = strings.TrimSuffix(fullPath, "*modelAction") + "{model}"
+		if action != "" {
+			endpoint += ":" + action
+		}
+	} else if strings.Contains(fullPath, "/:") {
+		endpoint = fullPath
+	}
+	return truncatePrivacyField(endpoint), truncatePrivacyField(model)
+}
+
+func truncatePrivacyField(s string) string {
+	if len(s) > privacyMaskingFieldMaxLen {
+		return s[:privacyMaskingFieldMaxLen]
+	}
+	return s
+}
+
+// unmaskingResponseWriter 边写边恢复占位符，不缓冲整个响应，SSE 可正常逐块下发。
+// 只有当本次写入的末尾可能是被拆开的占位符时才暂存这一小段（最多 64 字节）。
 type unmaskingResponseWriter struct {
 	gin.ResponseWriter
-	service *PrivacyMaskingService
-	ctx     context.Context
-	body    *bytes.Buffer
-	logger  *zap.Logger
+	placeholders map[string]string
+	pending      []byte
+}
+
+// 恢复后长度会变化，必须去掉上游带来的 Content-Length
+func (w *unmaskingResponseWriter) WriteHeader(code int) {
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *unmaskingResponseWriter) WriteHeaderNow() {
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeaderNow()
 }
 
 func (w *unmaskingResponseWriter) Write(data []byte) (int, error) {
-	// 收集响应数据
-	w.body.Write(data)
+	w.Header().Del("Content-Length")
+	buf := append(w.pending, data...)
+	emit, keep := splitPartialPlaceholder(buf)
+	w.pending = append([]byte(nil), keep...)
+	if len(emit) > 0 {
+		if _, err := w.ResponseWriter.Write([]byte(UnmaskWith(w.placeholders, string(emit)))); err != nil {
+			return 0, err
+		}
+	}
 	return len(data), nil
 }
 
@@ -151,60 +237,30 @@ func (w *unmaskingResponseWriter) WriteString(s string) (int, error) {
 	return w.Write([]byte(s))
 }
 
-// UnmaskResponse 恢复响应中间件
-func (m *PrivacyMaskingMiddleware) UnmaskResponse() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 检查是否启用了脱敏
-		maskingCtx, ok := c.Request.Context().Value(maskingContextKey).(*maskingContext)
-		if !ok || !maskingCtx.enabled {
-			c.Next()
-			return
-		}
-
-		// 包装 ResponseWriter
-		writer := &unmaskingResponseWriter{
-			ResponseWriter: c.Writer,
-			service:        m.service,
-			ctx:            c.Request.Context(),
-			body:           &bytes.Buffer{},
-			logger:         m.logger,
-		}
-		c.Writer = writer
-
-		c.Next()
-
-		// 恢复响应中的占位符
-		if writer.body.Len() > 0 {
-			unmasked := m.service.UnmaskJSON(c.Request.Context(), writer.body.Bytes())
-			
-			// 写入恢复后的响应
-			writer.ResponseWriter.Write(unmasked)
-		}
+// finish 写出暂存的尾部
+func (w *unmaskingResponseWriter) finish() {
+	if len(w.pending) == 0 {
+		return
 	}
+	tail := w.pending
+	w.pending = nil
+	_, _ = w.ResponseWriter.Write([]byte(UnmaskWith(w.placeholders, string(tail))))
 }
 
-// MaskRequestBody 脱敏请求体（用于 Gateway Service）
-func (m *PrivacyMaskingMiddleware) MaskRequestBody(ctx context.Context, body []byte) ([]byte, *MaskingResult, error) {
-	config, err := m.service.LoadConfig(ctx)
-	if err != nil {
-		return body, nil, err
+// splitPartialPlaceholder 把缓冲区拆成可立即输出的部分和可能是未完整占位符的尾部
+func splitPartialPlaceholder(buf []byte) (emit, keep []byte) {
+	if len(buf) == 0 {
+		return buf, nil
 	}
-
-	if !config.Enabled {
-		return body, &MaskingResult{Masked: string(body)}, nil
+	if idx := bytes.LastIndex(buf, []byte("{{")); idx >= 0 && len(buf)-idx <= privacyMaskingMaxPlaceholderLen {
+		if tail := buf[idx:]; !bytes.Contains(tail, []byte("}}")) && partialPlaceholderPattern.Match(tail) {
+			return buf[:idx], tail
+		}
 	}
-
-	return m.service.MaskJSON(ctx, body)
-}
-
-// UnmaskResponseBody 恢复响应体
-func (m *PrivacyMaskingMiddleware) UnmaskResponseBody(ctx context.Context, body []byte) []byte {
-	return m.service.UnmaskJSON(ctx, body)
-}
-
-// UnmaskStreamChunk 恢复流式响应块
-func (m *PrivacyMaskingMiddleware) UnmaskStreamChunk(ctx context.Context, chunk string) string {
-	return m.service.Unmask(ctx, chunk)
+	if buf[len(buf)-1] == '{' {
+		return buf[:len(buf)-1], buf[len(buf)-1:]
+	}
+	return buf, nil
 }
 
 // extractKinds 从检测结果中提取类型列表
@@ -219,107 +275,4 @@ func extractKinds(detections []MaskingDetection) []string {
 		}
 	}
 	return kinds
-}
-
-// StreamUnmasker 流式响应恢复器
-type StreamUnmasker struct {
-	service *PrivacyMaskingService
-	ctx     context.Context
-}
-
-// NewStreamUnmasker 创建流式恢复器
-func (m *PrivacyMaskingMiddleware) NewStreamUnmasker(ctx context.Context) *StreamUnmasker {
-	return &StreamUnmasker{
-		service: m.service,
-		ctx:     ctx,
-	}
-}
-
-// UnmaskChunk 恢复单个 SSE 数据块
-func (u *StreamUnmasker) UnmaskChunk(chunk []byte) []byte {
-	// SSE 格式: data: {...}\n\n
-	chunkStr := string(chunk)
-	
-	// 处理 SSE 格式的数据
-	if strings.HasPrefix(chunkStr, "data: ") {
-		lines := strings.Split(chunkStr, "\n")
-		var result []string
-		
-		for _, line := range lines {
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
-				
-				// 特殊情况：[DONE]
-				if data == "[DONE]" {
-					result = append(result, line)
-					continue
-				}
-				
-				// 解析 JSON
-				var jsonData map[string]interface{}
-				if err := json.Unmarshal([]byte(data), &jsonData); err != nil {
-					// 不是 JSON，直接恢复字符串
-					unmasked := u.service.Unmask(u.ctx, data)
-					result = append(result, "data: "+unmasked)
-				} else {
-					// 恢复 JSON 中的占位符
-					unmaskedBytes := u.service.UnmaskJSON(u.ctx, []byte(data))
-					result = append(result, "data: "+string(unmaskedBytes))
-				}
-			} else {
-				result = append(result, line)
-			}
-		}
-		
-		return []byte(strings.Join(result, "\n"))
-	}
-	
-	// 非 SSE 格式，直接恢复
-	return []byte(u.service.Unmask(u.ctx, chunkStr))
-}
-
-// LogMasking 记录脱敏事件
-func (m *PrivacyMaskingMiddleware) LogMasking(ctx context.Context, result *MaskingResult, userID int64, apiKeyID *int64, groupID *int64, requestID, endpoint, model string) error {
-	if result == nil || len(result.Detections) == 0 {
-		return nil
-	}
-
-	// 统计每种类型的数量
-	kinds := make(map[string]int)
-	actions := make(map[string]PrivacyMaskingAction)
-	samples := []PrivacyMaskingValueSample{}
-
-	for _, det := range result.Detections {
-		kindStr := string(det.Kind)
-		kinds[kindStr]++
-		actions[kindStr] = det.Action
-
-		// 只保存前几个示例
-		if len(samples) < 10 {
-			samples = append(samples, PrivacyMaskingValueSample{
-				Kind:   det.Kind,
-				Prefix: CreateSamplePrefix(det.Value, 4),
-				Length: len(det.Value),
-			})
-		}
-	}
-
-	log := &PrivacyMaskingLog{
-		RequestID:      requestID,
-		UserID:         userID,
-		APIKeyID:       apiKeyID,
-		GroupID:        groupID,
-		Kinds:          kinds,
-		Actions:        actions,
-		TotalCount:     len(result.Detections),
-		MaskedCount:    result.MaskedCount,
-		WarnedCount:    result.WarnedCount,
-		BlockedCount:   result.BlockedCount,
-		RequestBlocked: result.ShouldBlock,
-		ValueSamples:   samples,
-		Endpoint:       endpoint,
-		Model:          model,
-	}
-
-	return m.service.LogMasking(ctx, log)
 }

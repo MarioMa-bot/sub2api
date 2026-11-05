@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-	"go.uber.org/zap"
 )
 
 import (
@@ -291,14 +290,13 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogRepository := repository.NewAuditLogRepository(db)
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
-	privacyMaskingRepository := repository.NewPrivacyMaskingRepository(client, db)
-	privacyMaskingService, err := service.NewPrivacyMaskingService()
+	privacyMaskingStore := repository.NewPrivacyMaskingRepository(db)
+	privacyMaskingService, err := service.NewPrivacyMaskingService(privacyMaskingStore)
 	if err != nil {
 		return nil, err
 	}
-	zapLogger := zap.NewNop() // Use no-op logger for now
-	privacyMaskingMiddleware := service.NewPrivacyMaskingMiddleware(privacyMaskingService, zapLogger)
-	privacyMaskingHandler := admin.NewPrivacyMaskingHandler(privacyMaskingRepository, zapLogger)
+	privacyMaskingMiddleware := service.NewPrivacyMaskingMiddleware(privacyMaskingService)
+	privacyMaskingHandler := admin.NewPrivacyMaskingHandler(privacyMaskingService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	openCodeGoUsageService := service.ProvideOpenCodeGoUsageService(accountRepository, httpUpstream, settingService, leaderLockCache, db)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)

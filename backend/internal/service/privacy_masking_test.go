@@ -8,13 +8,13 @@ import (
 
 func TestPrivacyMaskingService_Mask(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewPrivacyMaskingService()
+	svc, err := NewPrivacyMaskingService(nil)
 	if err != nil {
 		t.Fatalf("NewPrivacyMaskingService failed: %v", err)
 	}
 
 	// 启用脱敏
-	svc.config = &PrivacyMaskingConfig{
+	svc.applyConfig(&PrivacyMaskingConfig{
 		Enabled:      true,
 		MaskSecrets:  true,
 		MaskPersonal: false,
@@ -22,13 +22,12 @@ func TestPrivacyMaskingService_Mask(t *testing.T) {
 		CustomRules:  []PrivacyMaskingRule{},
 		AllowList:    []string{},
 		KindActions:  make(map[string]PrivacyMaskingAction),
-	}
-	svc.compileRules()
+	})
 
 	tests := []struct {
-		name          string
-		input         string
-		shouldContain string
+		name             string
+		input            string
+		shouldContain    string
 		shouldNotContain string
 	}{
 		{
@@ -70,12 +69,12 @@ func TestPrivacyMaskingService_Mask(t *testing.T) {
 
 func TestPrivacyMaskingService_MaskUnmask_Roundtrip(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewPrivacyMaskingService()
+	svc, err := NewPrivacyMaskingService(nil)
 	if err != nil {
 		t.Fatalf("NewPrivacyMaskingService failed: %v", err)
 	}
 
-	svc.config = &PrivacyMaskingConfig{
+	svc.applyConfig(&PrivacyMaskingConfig{
 		Enabled:      true,
 		MaskSecrets:  true,
 		MaskPersonal: false,
@@ -83,8 +82,7 @@ func TestPrivacyMaskingService_MaskUnmask_Roundtrip(t *testing.T) {
 		CustomRules:  []PrivacyMaskingRule{},
 		AllowList:    []string{},
 		KindActions:  make(map[string]PrivacyMaskingAction),
-	}
-	svc.compileRules()
+	})
 
 	original := "My API key is sk-1234567890abcdefghij and another sk-9876543210zyxwvutsrq"
 
@@ -103,7 +101,7 @@ func TestPrivacyMaskingService_MaskUnmask_Roundtrip(t *testing.T) {
 	}
 
 	// Unmask
-	unmasked := svc.Unmask(ctx, result.Masked)
+	unmasked := UnmaskWith(result.Placeholders, result.Masked)
 
 	if unmasked != original {
 		t.Errorf("Unmask failed: expected %q, got %q", original, unmasked)
@@ -112,12 +110,12 @@ func TestPrivacyMaskingService_MaskUnmask_Roundtrip(t *testing.T) {
 
 func TestPrivacyMaskingService_AllowList(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewPrivacyMaskingService()
+	svc, err := NewPrivacyMaskingService(nil)
 	if err != nil {
 		t.Fatalf("NewPrivacyMaskingService failed: %v", err)
 	}
 
-	svc.config = &PrivacyMaskingConfig{
+	svc.applyConfig(&PrivacyMaskingConfig{
 		Enabled:      true,
 		MaskSecrets:  true,
 		MaskPersonal: false,
@@ -125,8 +123,7 @@ func TestPrivacyMaskingService_AllowList(t *testing.T) {
 		CustomRules:  []PrivacyMaskingRule{},
 		AllowList:    []string{"sk-test1234567890abcdef"},
 		KindActions:  make(map[string]PrivacyMaskingAction),
-	}
-	svc.compileRules()
+	})
 
 	input := "My keys: sk-test1234567890abcdef and sk-prod1234567890abcdef"
 	result, err := svc.Mask(ctx, input)
@@ -147,12 +144,12 @@ func TestPrivacyMaskingService_AllowList(t *testing.T) {
 
 func TestPrivacyMaskingService_Actions(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewPrivacyMaskingService()
+	svc, err := NewPrivacyMaskingService(nil)
 	if err != nil {
 		t.Fatalf("NewPrivacyMaskingService failed: %v", err)
 	}
 
-	svc.config = &PrivacyMaskingConfig{
+	svc.applyConfig(&PrivacyMaskingConfig{
 		Enabled:      true,
 		MaskSecrets:  true,
 		MaskPersonal: false,
@@ -162,8 +159,7 @@ func TestPrivacyMaskingService_Actions(t *testing.T) {
 		},
 		AllowList:   []string{},
 		KindActions: make(map[string]PrivacyMaskingAction),
-	}
-	svc.compileRules()
+	})
 
 	input := "This contains secret-abc123"
 	result, err := svc.Mask(ctx, input)
