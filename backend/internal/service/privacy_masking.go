@@ -474,11 +474,11 @@ func (s *PrivacyMaskingService) applyMasking(text string, result *MaskingResult)
 			result.Placeholders = make(map[string]string)
 		}
 		result.Placeholders[placeholder] = det.Value
-		b.WriteString(text[cursor:det.Start])
-		b.WriteString(placeholder)
+		_, _ = b.WriteString(text[cursor:det.Start])
+		_, _ = b.WriteString(placeholder)
 		cursor = det.End
 	}
-	b.WriteString(text[cursor:])
+	_, _ = b.WriteString(text[cursor:])
 	return b.String()
 }
 
@@ -486,7 +486,7 @@ func (s *PrivacyMaskingService) applyMasking(text string, result *MaskingResult)
 // Generate a stable placeholder for a sensitive value using HMAC-SHA256
 func (s *PrivacyMaskingService) generatePlaceholder(kind PrivacyMaskingKind, value string) string {
 	h := hmac.New(sha256.New, s.hmacKey)
-	h.Write([]byte(value))
+	_, _ = h.Write([]byte(value))
 	suffix := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(h.Sum(nil)[:8])
 	return fmt.Sprintf("{{%s_%s}}", kind, strings.ToLower(suffix)[:8])
 }
