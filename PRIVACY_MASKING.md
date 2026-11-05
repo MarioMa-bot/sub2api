@@ -42,10 +42,9 @@ Sub2API 的隐私脱敏功能可以在请求发送到上游 API 提供商之前�
 
 ### 内存存储
 
-原始值到占位符的映射**仅存储在内存中**，不会写入磁盘或数据库。这确保：
-- 重启后映射丢失（下次请求会重新生成）
-- 没有持久化的安全风险
-- 性能优秀
+原始值到占位符的映射**仅存在于单次请求的内存中**，请求结束即释放，不会写入磁盘、数据库或日志。这确保：
+- 没有持久化的安全风险，也不会随运行时间无限增长
+- 响应（包括 SSE 流）边写边恢复，不会缓冲整个响应
 
 ## 安装和配置
 
@@ -55,7 +54,7 @@ Sub2API 的隐私脱敏功能可以在请求发送到上游 API 提供商之前�
 - `privacy_masking_config`：存储配置
 - `privacy_masking_log`：存储审计日志
 
-迁移文件已包含在 `backend/migrations/250_privacy_masking.sql`，运行应用时会自动应用。
+迁移文件 `backend/migrations/250_privacy_masking.sql`（建表）和 `251_privacy_masking_log_endpoint_index_notx.sql`（按接口查询的索引）会在启动时自动应用。配置保存后立即生效（多实例约 10 秒内同步）。
 
 ### 2. 后端配置
 
@@ -230,28 +229,41 @@ environment:
 
 ### 查看脱敏日志
 
-在管理界面的 "最近的脱敏日志" 部分可以看到：
-- 检测时间
-- 检测到的类型和数量
-- 采取的动作
-- 请求是否被阻止
+管理后台 → 隐私脱敏 → **「脱敏日志」** 标签页（`/admin/privacy-masking?tab=logs`）：
+
+- **统计卡片**：所选时间范围内的脱敏事件数、被阻止的请求数、已脱敏/仅警告的值数量
+- **按 API 接口统计**：每个接口（如 `/v1/messages`、`/v1/chat/completions`、`/v1beta/models/{model}:generateContent`）的事件数、阻止数、命中值数和最近一次时间；点击某一行即按该接口过滤
+- **日志列表**：时间、接口 / 模型、调用方（用户 ID、API Key ID、分组 ID）、命中类型及数量、处理结果（脱敏/警告/阻止数量）、是否阻止、请求 ID
+- **过滤条件**：API 接口、类型、结果（已阻止/已通过）、时间范围（含自定义）、模型、用户 ID、API Key ID；支持分页
+
+日志只记录元数据，**绝不包含原始敏感值**；值示例只保留长度，API_KEY/TOKEN 类型额外保留前 4 个字符（如 `sk-a...`，属于公开的格式前缀）。
+
+记录规则：
+- 网关所有入口（`/v1`、`/v1beta`、根路径别名、`/backend-api/codex`、`/antigravity`）的 POST/PUT/PATCH JSON 请求体都会检测
+- 命中任意规则（脱敏、警告、阻止）即写一条日志；被阻止的请求也会记录
+- 日志在请求转发前异步写入，上游失败不影响记录；未启用脱敏时不产生日志
+- 接口名使用实际路径；带路径参数的路由使用路由模板，Gemini 的模型名归一为 `{model}`
 
 ### 日志保留
 
-- 命中日志默认保留 180 天
-- 未命中日志默认保留 3 天
-- 可通过配置调整保留期限
+目前没有自动清理，`privacy_masking_log` 会持续增长，可按 `detected_at` 定期手动清理。
 
 ### API 查询
 
-通过 API 查询脱敏日志：
+所有接口位于 `/api/v1/admin/privacy-masking`，返回统一的 `{code, message, data}` 结构，需管理员登录。
 
 ```bash
-# 获取所有日志
-GET /api/admin/privacy-masking/logs
+# 分页查询日志（page / page_size，page_size 最大 200）
+GET /api/v1/admin/privacy-masking/logs?page=1&page_size=20
 
-# 过滤参数
-GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
+# 过滤：endpoint、kind、model（模糊）、user_id、api_key_id、group_id、blocked、start_time / end_time（RFC3339）
+GET /api/v1/admin/privacy-masking/logs?endpoint=/v1/messages&kind=API_KEY&blocked=true&start_time=2026-11-01T00:00:00Z
+
+# 按 API 接口聚合（可选 start_time / end_time）
+GET /api/v1/admin/privacy-masking/logs/endpoints
+
+# 统计概览（since 默认 24 小时前）
+GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 ```
 
 ## 性能影响
@@ -263,14 +275,13 @@ GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
 
 ### 内存使用
 
-- 每个占位符映射：约 100-200 字节
-- 1000 个映射：约 100-200 KB
+- 占位符映射只在单次请求内存在，请求结束即释放
 
 ### 优化建议
 
 1. **限制自定义规则数量**：过多的正则规则会增加延迟
 2. **使用白名单**：对频繁出现的已知安全值添加白名单
-3. **定期清理**：重启服务会清空内存映射
+3. **定期清理日志**：`privacy_masking_log` 目前没有自动清理
 
 ## 安全考虑
 
@@ -283,7 +294,9 @@ GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
 
 ### 风险和限制
 
-⚠️ **重启丢失映射**：服务重启后，之前的占位符无法恢复（需要重新发送请求）
+⚠️ **跨事件拆分**：模型若把一个占位符拆到多个 SSE 事件里输出，该占位符无法恢复
+⚠️ **非 JSON 请求**：multipart、二进制等非 JSON 请求体不检测
+⚠️ **通用长串规则**：32 位以上字母数字串（如哈希）也会被视为 API_KEY 脱敏；紧邻 `+ / =` 的 base64 片段会被跳过
 ⚠️ **上游缓存**：如果上游缓存了占位符响应，需要清除缓存
 ⚠️ **规则完整性**：内置规则无法覆盖所有情况，可能有漏检
 
@@ -308,8 +321,9 @@ GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
 ### 问题：响应中占位符未恢复
 
 **可能原因**：
-1. 服务重启导致映射丢失
-2. 响应来自上游缓存
+1. 模型把占位符拆到了多个流式事件中
+2. 模型改写了占位符（大小写、空格）
+3. 响应来自上游缓存
 
 **解决方案**：
 1. 重新发送请求
@@ -380,10 +394,11 @@ GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
 
 ### API 端点
 
-- `GET /api/admin/privacy-masking/config` - 获取配置
-- `PUT /api/admin/privacy-masking/config` - 更新配置
-- `GET /api/admin/privacy-masking/logs` - 查询日志
-- `GET /api/admin/privacy-masking/stats` - 获取统计
+- `GET /api/v1/admin/privacy-masking/config` - 获取配置
+- `PUT /api/v1/admin/privacy-masking/config` - 更新配置（校验动作与正则，保存即生效）
+- `GET /api/v1/admin/privacy-masking/logs` - 分页查询日志（支持接口、类型、结果、时间等过滤）
+- `GET /api/v1/admin/privacy-masking/logs/endpoints` - 按 API 接口聚合
+- `GET /api/v1/admin/privacy-masking/stats` - 统计概览
 
 ## 参考
 

@@ -46,10 +46,9 @@ Sub2API 的隐私脱敏功能可以在请求发送到上游 API 提供商之前�
 
 #### 内存存储
 
-原始值到占位符的映射**仅存储在内存中**，不会写入磁盘或数据库。这确保：
-- 重启后映射丢失（下次请求会重新生成）
-- 没有持久化的安全风险
-- 性能优秀
+原始值到占位符的映射**仅存在于单次请求的内存中**，请求结束即释放，不会写入磁盘、数据库或日志。这确保：
+- 没有持久化的安全风险，也不会随运行时间无限增长
+- 响应（包括 SSE 流）边写边恢复，不会缓冲整个响应
 
 ### 安装和配置
 
@@ -59,7 +58,7 @@ Sub2API 的隐私脱敏功能可以在请求发送到上游 API 提供商之前�
 - `privacy_masking_config`：存储配置
 - `privacy_masking_log`：存储审计日志
 
-迁移文件已包含在 `backend/migrations/250_privacy_masking.sql`，运行应用时会自动应用。
+迁移文件 `backend/migrations/250_privacy_masking.sql`（建表）和 `251_privacy_masking_log_endpoint_index_notx.sql`（按接口查询的索引）会在启动时自动应用。配置保存后立即生效（多实例约 10 秒内同步）。
 
 #### 2. 启用脱敏
 
@@ -111,7 +110,7 @@ docker-compose up -d
 docker-compose logs backend | grep migration
 ```
 
-确认 `250_privacy_masking.sql` 迁移已应用。
+确认 `250_privacy_masking.sql` 与 `251_privacy_masking_log_endpoint_index_notx.sql` 迁移已应用。
 
 #### 5. 访问管理界面
 
@@ -121,20 +120,41 @@ docker-compose logs backend | grep migration
 
 #### 查看脱敏日志
 
-在管理界面的 "最近的脱敏日志" 部分可以看到：
-- 检测时间
-- 检测到的类型和数量
-- 采取的动作
-- 请求是否被阻止
+管理后台 → 隐私脱敏 → **「脱敏日志」** 标签页（`/admin/privacy-masking?tab=logs`）：
+
+- **统计卡片**：所选时间范围内的脱敏事件数、被阻止的请求数、已脱敏/仅警告的值数量
+- **按 API 接口统计**：每个接口（如 `/v1/messages`、`/v1/chat/completions`、`/v1beta/models/{model}:generateContent`）的事件数、阻止数、命中值数和最近一次时间；点击某一行即按该接口过滤
+- **日志列表**：时间、接口 / 模型、调用方（用户 ID、API Key ID、分组 ID）、命中类型及数量、处理结果（脱敏/警告/阻止数量）、是否阻止、请求 ID
+- **过滤条件**：API 接口、类型、结果（已阻止/已通过）、时间范围（含自定义）、模型、用户 ID、API Key ID；支持分页
+
+日志只记录元数据，**绝不包含原始敏感值**；值示例只保留长度，API_KEY/TOKEN 类型额外保留前 4 个字符（如 `sk-a...`，属于公开的格式前缀）。
+
+记录规则：
+- 网关所有入口（`/v1`、`/v1beta`、根路径别名、`/backend-api/codex`、`/antigravity`）的 POST/PUT/PATCH JSON 请求体都会检测
+- 命中任意规则（脱敏、警告、阻止）即写一条日志；被阻止的请求也会记录
+- 日志在请求转发前异步写入，上游失败不影响记录；未启用脱敏时不产生日志
+- 接口名使用实际路径；带路径参数的路由使用路由模板，Gemini 的模型名归一为 `{model}`
+
+#### 日志保留
+
+目前没有自动清理，`privacy_masking_log` 会持续增长，可按 `detected_at` 定期手动清理。
 
 #### API 查询
 
-```bash
-# 获取所有日志
-GET /api/admin/privacy-masking/logs
+所有接口位于 `/api/v1/admin/privacy-masking`，返回统一的 `{code, message, data}` 结构，需管理员登录。
 
-# 过滤参数
-GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
+```bash
+# 分页查询日志（page / page_size，page_size 最大 200）
+GET /api/v1/admin/privacy-masking/logs?page=1&page_size=20
+
+# 过滤：endpoint、kind、model（模糊）、user_id、api_key_id、group_id、blocked、start_time / end_time（RFC3339）
+GET /api/v1/admin/privacy-masking/logs?endpoint=/v1/messages&kind=API_KEY&blocked=true&start_time=2026-11-01T00:00:00Z
+
+# 按 API 接口聚合（可选 start_time / end_time）
+GET /api/v1/admin/privacy-masking/logs/endpoints
+
+# 统计概览（since 默认 24 小时前）
+GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 ```
 
 ### 安全考虑
@@ -219,10 +239,9 @@ Placeholders are generated using HMAC-SHA256, ensuring:
 
 #### Memory-Only Storage
 
-Original value ↔ placeholder mappings are stored **in memory only**, never written to disk or database. This ensures:
-- Mappings are lost on restart (regenerated on next request)
-- No persistent security risks
-- Excellent performance
+Original value ↔ placeholder mappings live **in memory for the lifetime of a single request only**; they are never written to disk, the database or logs. This ensures:
+- No persistent security risk, and no unbounded growth over time
+- Responses (including SSE streams) are restored as they are written, without buffering the whole body
 
 ### Installation and Configuration
 
@@ -232,7 +251,7 @@ The masking feature requires two database tables:
 - `privacy_masking_config`: Store configuration
 - `privacy_masking_log`: Store audit logs
 
-Migration file is included at `backend/migrations/250_privacy_masking.sql` and will be applied automatically.
+Migrations `backend/migrations/250_privacy_masking.sql` (tables) and `251_privacy_masking_log_endpoint_index_notx.sql` (per-endpoint index) are applied automatically on startup. Saved config takes effect immediately (within ~10s on other instances).
 
 #### 2. Enable Masking
 
@@ -294,20 +313,39 @@ Open browser: `https://your-domain.com/admin/privacy-masking`
 
 #### View Masking Logs
 
-In the "Recent Masking Logs" section, you can see:
-- Detection time
-- Types and counts detected
-- Actions taken
-- Whether request was blocked
+Admin console → Privacy Masking → **"Masking Logs"** tab (`/admin/privacy-masking?tab=logs`):
+
+- **Stat cards**: masking events, blocked requests, values masked / warned in the selected time range
+- **By API endpoint**: events, blocked, values hit and last seen per endpoint (e.g. `/v1/messages`, `/v1/chat/completions`, `/v1beta/models/{model}:generateContent`); click a row to filter by it
+- **Log table**: time, endpoint / model, caller (user ID, API key ID, group ID), kinds with counts, handling (masked / warned / blocked counts), blocked status, request ID
+- **Filters**: endpoint, kind, result (blocked / passed), time range (incl. custom), model, user ID, API key ID; paginated
+
+Logs hold metadata only and **never contain raw values**. Samples keep only the length, plus the first 4 characters for API_KEY / TOKEN (public format prefixes such as `sk-a...`).
+
+What gets logged:
+- POST/PUT/PATCH JSON bodies on every gateway entry (`/v1`, `/v1beta`, root aliases, `/backend-api/codex`, `/antigravity`)
+- One row per request that hits any rule (mask, warn or block), including blocked requests
+- Written asynchronously before forwarding, so upstream failures do not drop the row; nothing is logged while masking is disabled
+- The endpoint is the request path; routes with path params use the route template, and Gemini model names are normalized to `{model}`
+
+There is no automatic retention yet; prune `privacy_masking_log` by `detected_at` if needed.
 
 #### API Queries
 
-```bash
-# Get all logs
-GET /api/admin/privacy-masking/logs
+All endpoints live under `/api/v1/admin/privacy-masking`, require an admin session and return the standard `{code, message, data}` envelope.
 
-# With filters
-GET /api/admin/privacy-masking/logs?user_id=123&blocked=true&limit=100
+```bash
+# Paginated logs (page / page_size, page_size max 200)
+GET /api/v1/admin/privacy-masking/logs?page=1&page_size=20
+
+# Filters: endpoint, kind, model (substring), user_id, api_key_id, group_id, blocked, start_time / end_time (RFC3339)
+GET /api/v1/admin/privacy-masking/logs?endpoint=/v1/messages&kind=API_KEY&blocked=true&start_time=2026-11-01T00:00:00Z
+
+# Aggregated per API endpoint (optional start_time / end_time)
+GET /api/v1/admin/privacy-masking/logs/endpoints
+
+# Overview stats (since defaults to 24h ago)
+GET /api/v1/admin/privacy-masking/stats?since=2026-11-01T00:00:00Z
 ```
 
 ### Security Considerations
