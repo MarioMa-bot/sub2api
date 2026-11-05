@@ -1,15 +1,21 @@
 export default {
   privacyMasking: {
     title: '隐私脱敏',
-    description: '在请求发送到上游前自动检测并脱敏敏感信息',
-    
+    description: '在请求发送到上游前自动检测并脱敏敏感信息，并按 API 接口记录脱敏日志',
+
+    // 标签页
+    tabs: {
+      rules: '规则配置',
+      logs: '脱敏日志',
+    },
+
     // 全局开关
     enabled: {
       title: '启用隐私脱敏',
       description: '在请求发送到上游前自动检测并脱敏敏感信息',
-      hint: '关闭后所有脱敏规则停止工作，请求将直接转发',
+      hint: '关闭后所有脱敏规则停止工作，请求将直接转发；保存后立即生效',
     },
-    
+
     // 基础配置
     basic: {
       title: '基础配置',
@@ -22,11 +28,11 @@ export default {
         description: '自动检测并脱敏邮箱、电话、信用卡号等个人身份信息',
       },
     },
-    
+
     // 动作配置
     actions: {
-      title: '动作配置',
-      description: '对检测到的每种敏感信息采取不同的动作',
+      title: '类型与动作',
+      description: '勾选需要检测的类型，并为每种类型选择动作：脱敏后转发、仅警告（原文转发）或直接阻止请求',
       mask: '脱敏 (推荐)',
       warn: '仅警告',
       block: '阻止请求',
@@ -59,39 +65,78 @@ export default {
           label: '信用卡',
           description: '信用卡号',
         },
+        CUSTOM: {
+          label: '自定义',
+          description: '自定义规则命中',
+        },
       },
     },
-    
+
     // 白名单
     allowList: {
       title: '白名单',
-      description: '这些值永远不会被脱敏（每行一个，精确匹配）',
+      description: '这些值永远不会被脱敏（每行一个，精确匹配，不区分大小写）',
       placeholder: 'example-key-12345\ntest@example.com\n+1234567890',
       hint: '添加已知安全的值，如测试密钥',
     },
-    
+
     // 自定义规则
     customRules: {
       title: '自定义规则',
-      description: '使用正则表达式定义自定义的脱敏规则',
+      description: '使用正则表达式定义自定义的脱敏规则；有捕获组时只替换第一个捕获组',
       pattern: '正则表达式',
       action: '动作',
       add: '+ 添加规则',
       remove: '删除',
       patternPlaceholder: '例如: secret-[a-zA-Z0-9]+',
+      kindPlaceholder: '类型，如 CUSTOM',
     },
-    
+
     // 日志
     logs: {
-      title: '最近的脱敏日志',
+      title: '脱敏日志',
       refresh: '刷新',
       empty: '暂无脱敏日志',
+      disabledHint: '隐私脱敏当前未启用，网关不会产生新的脱敏日志。请在“规则配置”中开启。',
+      unknownEndpoint: '(未知接口)',
+      endpoints: {
+        title: '按 API 接口统计',
+        hint: '点击某一行按该接口过滤日志',
+        events: '事件数',
+        blocked: '阻止',
+        detected: '命中值',
+        lastSeen: '最近一次',
+      },
+      stats: {
+        events: '脱敏事件',
+        blocked: '被阻止的请求',
+        masked: '已脱敏的值',
+        warned: '仅警告的值',
+      },
+      filters: {
+        all: '全部',
+        allEndpoints: '全部接口',
+        endpoint: 'API 接口',
+        kind: '类型',
+        result: '结果',
+        model: '模型',
+        userId: '用户 ID',
+        apiKeyId: 'API Key ID',
+      },
       columns: {
         time: '时间',
+        endpoint: '接口 / 模型',
+        caller: '调用方',
         kinds: '类型',
         count: '数量',
-        action: '动作',
+        action: '处理',
         status: '状态',
+        requestId: '请求 ID',
+      },
+      caller: {
+        user: '用户',
+        apiKey: 'Key',
+        group: '分组',
       },
       actions: {
         masked: '已脱敏',
@@ -103,20 +148,21 @@ export default {
         passed: '已通过',
       },
     },
-    
+
     // 按钮和操作
     buttons: {
       save: '保存配置',
       saving: '保存中...',
     },
-    
+
     // 消息
     messages: {
       saveSuccess: '配置已保存',
       saveError: '保存失败',
       loadError: '加载配置失败',
+      loadLogsError: '加载脱敏日志失败',
     },
-    
+
     // 帮助文本
     help: {
       howItWorks: {
