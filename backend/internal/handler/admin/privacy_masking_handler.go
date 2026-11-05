@@ -1,161 +1,173 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/repository"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
-// PrivacyMaskingHandler 隐私脱敏管理处理器
+// PrivacyMaskingHandler 隐私脱敏管理接口：规则配置、脱敏日志、按 API 接口统计
 type PrivacyMaskingHandler struct {
-	repo   *repository.PrivacyMaskingRepository
-	logger *zap.Logger
+	service *service.PrivacyMaskingService
 }
 
 // NewPrivacyMaskingHandler 创建处理器实例
-func NewPrivacyMaskingHandler(repo *repository.PrivacyMaskingRepository, logger *zap.Logger) *PrivacyMaskingHandler {
-	return &PrivacyMaskingHandler{
-		repo:   repo,
-		logger: logger,
-	}
+func NewPrivacyMaskingHandler(svc *service.PrivacyMaskingService) *PrivacyMaskingHandler {
+	return &PrivacyMaskingHandler{service: svc}
 }
 
-// GetGlobalConfig 获取全局配置
-// GET /admin/privacy-masking/config
-func (h *PrivacyMaskingHandler) GetGlobalConfig(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	config, err := h.repo.GetGlobalConfig(ctx)
+// GetConfig 获取全局脱敏配置
+// GET /api/v1/admin/privacy-masking/config
+func (h *PrivacyMaskingHandler) GetConfig(c *gin.Context) {
+	cfg, err := h.service.GetConfig(c.Request.Context())
 	if err != nil {
-		h.logger.Error("Failed to get global config", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get configuration"})
+		response.ErrorFrom(c, err)
 		return
 	}
-
-	c.JSON(http.StatusOK, config)
+	response.Success(c, cfg)
 }
 
-// SaveGlobalConfig 更新全局配置
-// PUT /admin/privacy-masking/config
-func (h *PrivacyMaskingHandler) SaveGlobalConfig(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	var config service.PrivacyMaskingConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+// SaveConfig 保存全局脱敏配置，保存后立即生效
+// PUT /api/v1/admin/privacy-masking/config
+func (h *PrivacyMaskingHandler) SaveConfig(c *gin.Context) {
+	var cfg service.PrivacyMaskingConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		response.BadRequest(c, "Invalid request body")
 		return
 	}
-
-	// TODO: 从认证上下文获取用户 ID
-	// config.UpdatedByUserID = &userID
-
-	if err := h.repo.SaveGlobalConfig(ctx, &config); err != nil {
-		h.logger.Error("Failed to update global config", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update configuration"})
+	if subject, ok := middleware.GetAuthSubjectFromContext(c); ok && subject.UserID > 0 {
+		userID := subject.UserID
+		cfg.UpdatedByUserID = &userID
+	}
+	if err := h.service.SaveConfig(c.Request.Context(), &cfg); err != nil {
+		if errors.Is(err, service.ErrPrivacyMaskingInvalidConfig) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ErrorFrom(c, err)
 		return
 	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-// GetGroupConfig 获取分组配置
-// GET /admin/privacy-masking/groups/:groupId/config
-func (h *PrivacyMaskingHandler) GetGroupConfig(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	groupID, err := strconv.ParseInt(c.Param("groupId"), 10, 64)
+	saved, err := h.service.GetConfig(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		response.ErrorFrom(c, err)
 		return
 	}
-
-	config, err := h.repo.GetGroupConfig(ctx, groupID)
-	if err != nil {
-		h.logger.Error("Failed to get group config", zap.Int64("group_id", groupID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get configuration"})
-		return
-	}
-
-	c.JSON(http.StatusOK, config)
+	response.Success(c, saved)
 }
 
-// SaveGroupConfig 更新分组配置
-// PUT /admin/privacy-masking/groups/:groupId/config
-func (h *PrivacyMaskingHandler) SaveGroupConfig(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	groupID, err := strconv.ParseInt(c.Param("groupId"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
-		return
-	}
-
-	var config service.PrivacyMaskingConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
-		return
-	}
-
-	if err := h.repo.SaveGroupConfig(ctx, groupID, &config); err != nil {
-		h.logger.Error("Failed to update group config", zap.Int64("group_id", groupID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update configuration"})
-		return
-	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-// ListLogs 列出脱敏日志
-// GET /admin/privacy-masking/logs
+// ListLogs 分页查询脱敏日志
+// GET /api/v1/admin/privacy-masking/logs
+// 过滤参数：endpoint、kind、model、user_id、api_key_id、group_id、blocked、start_time、end_time（RFC3339）
 func (h *PrivacyMaskingHandler) ListLogs(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// 解析查询参数（简化版 - 暂不支持过滤）
-	limit := 50
-	if limitStr := c.Query("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
-			limit = l
+	page, pageSize := response.ParsePagination(c)
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	filter := service.PrivacyMaskingLogFilter{
+		Page:     page,
+		PageSize: pageSize,
+		Endpoint: strings.TrimSpace(c.Query("endpoint")),
+		Kind:     strings.TrimSpace(c.Query("kind")),
+		Model:    strings.TrimSpace(c.Query("model")),
+	}
+	for _, p := range []struct {
+		name string
+		dest **int64
+	}{
+		{"user_id", &filter.UserID},
+		{"api_key_id", &filter.APIKeyID},
+		{"group_id", &filter.GroupID},
+	} {
+		if v := strings.TrimSpace(c.Query(p.name)); v != "" {
+			id, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || id <= 0 {
+				response.BadRequest(c, "Invalid "+p.name)
+				return
+			}
+			*p.dest = &id
 		}
 	}
-
-	offset := 0
-	if offsetStr := c.Query("offset"); offsetStr != "" {
-		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
-			offset = o
+	if v := strings.TrimSpace(c.Query("blocked")); v != "" {
+		blocked, err := strconv.ParseBool(v)
+		if err != nil {
+			response.BadRequest(c, "Invalid blocked, expect true or false")
+			return
 		}
+		filter.Blocked = &blocked
 	}
-
-	logs, total, err := h.repo.ListLogs(ctx, limit, offset)
-	if err != nil {
-		h.logger.Error("Failed to list logs", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list logs"})
+	var ok bool
+	if filter.StartTime, filter.EndTime, ok = parsePrivacyMaskingTimeRange(c); !ok {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"logs":   logs,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
+	logs, total, err := h.service.ListLogs(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, logs, total, page, pageSize)
 }
 
-// GetStats 获取脱敏统计
-// GET /admin/privacy-masking/stats
+// ListEndpoints 按 API 接口聚合脱敏事件
+// GET /api/v1/admin/privacy-masking/logs/endpoints
+func (h *PrivacyMaskingHandler) ListEndpoints(c *gin.Context) {
+	start, end, ok := parsePrivacyMaskingTimeRange(c)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListEndpointSummary(c.Request.Context(), start, end)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
+// GetStats 统计概览，since 默认为 24 小时前
+// GET /api/v1/admin/privacy-masking/stats
 func (h *PrivacyMaskingHandler) GetStats(c *gin.Context) {
-	_ctx := c.Request.Context()
-	_ = _ctx // unused for now
+	since := time.Now().Add(-24 * time.Hour)
+	if v := strings.TrimSpace(c.Query("since")); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			response.BadRequest(c, "Invalid since, expect RFC3339")
+			return
+		}
+		since = t
+	}
+	stats, err := h.service.GetStats(c.Request.Context(), since)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
+}
 
-	// TODO: 实现统计查询
-	// 例如：最近检测到的类型分布、阻止的请求数量等
-
-	c.JSON(http.StatusOK, gin.H{
-		"total_detections": 0,
-		"blocked_requests": 0,
-		"top_kinds":        []string{},
-	})
+func parsePrivacyMaskingTimeRange(c *gin.Context) (*time.Time, *time.Time, bool) {
+	var start, end *time.Time
+	for _, p := range []struct {
+		name string
+		dest **time.Time
+	}{
+		{"start_time", &start},
+		{"end_time", &end},
+	} {
+		if v := strings.TrimSpace(c.Query(p.name)); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				response.Error(c, http.StatusBadRequest, "Invalid "+p.name+", expect RFC3339")
+				return nil, nil, false
+			}
+			*p.dest = &t
+		}
+	}
+	return start, end, true
 }

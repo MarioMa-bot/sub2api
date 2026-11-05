@@ -910,11 +910,10 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 func registerPrivacyMaskingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	privacyMasking := admin.Group("/privacy-masking")
 	{
-		privacyMasking.GET("/config", h.Admin.PrivacyMasking.GetGlobalConfig)
-		privacyMasking.PUT("/config", h.Admin.PrivacyMasking.SaveGlobalConfig)
-		privacyMasking.GET("/groups/:groupId/config", h.Admin.PrivacyMasking.GetGroupConfig)
-		privacyMasking.PUT("/groups/:groupId/config", h.Admin.PrivacyMasking.SaveGroupConfig)
+		privacyMasking.GET("/config", h.Admin.PrivacyMasking.GetConfig)
+		privacyMasking.PUT("/config", h.Admin.PrivacyMasking.SaveConfig)
 		privacyMasking.GET("/logs", h.Admin.PrivacyMasking.ListLogs)
+		privacyMasking.GET("/logs/endpoints", h.Admin.PrivacyMasking.ListEndpoints)
 		privacyMasking.GET("/stats", h.Admin.PrivacyMasking.GetStats)
 	}
 }
