@@ -57,6 +57,7 @@ KIND_TO_PRESIDIO["ID_NUMBER"] = "US_SSN"
 DEFAULT_KINDS = ["PERSON", "LOCATION", "ORG"]
 
 CJK_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
 
 
 def build_analyzer() -> AnalyzerEngine:
@@ -94,13 +95,27 @@ def build_analyzer() -> AnalyzerEngine:
 ANALYZER = None
 
 
-def pick_language(text: str, requested: str | None) -> str:
+def pick_languages(text: str, requested: str | None) -> list:
+    """中英混排时两种模型都跑一遍再合并；纯中文只跑 zh，其余只跑 en"""
     supported = ANALYZER.supported_languages
     if requested and requested in supported:
-        return requested
+        return [requested]
+    langs = []
     if "zh" in supported and CJK_RE.search(text):
-        return "zh"
-    return "en" if "en" in supported else supported[0]
+        langs.append("zh")
+    if "en" in supported and (not langs or LATIN_WORD_RE.search(text)):
+        langs.append("en")
+    return langs or [supported[0]]
+
+
+def merge_overlaps(results: list) -> list:
+    """多个模型结果重叠时保留得分高、跨度长的那个"""
+    ordered = sorted(results, key=lambda r: (-r.score, -(r.end - r.start), r.start))
+    kept = []
+    for r in ordered:
+        if all(r.end <= k.start or r.start >= k.end for k in kept):
+            kept.append(r)
+    return kept
 
 
 def analyze(payload: dict) -> list:
@@ -119,10 +134,11 @@ def analyze(payload: dict) -> list:
     except (TypeError, ValueError):
         min_score = MIN_SCORE
 
-    language = pick_language(text, payload.get("language"))
-    results = ANALYZER.analyze(text=text, language=language, entities=entities, score_threshold=min_score)
+    results = []
+    for language in pick_languages(text, payload.get("language")):
+        results.extend(ANALYZER.analyze(text=text, language=language, entities=entities, score_threshold=min_score))
     out = []
-    for r in results:
+    for r in merge_overlaps(results):
         kind = PRESIDIO_TO_KIND.get(r.entity_type, r.entity_type)
         out.append({"start": r.start, "end": r.end, "kind": kind, "score": round(float(r.score), 4)})
     out.sort(key=lambda x: (x["start"], -x["end"]))

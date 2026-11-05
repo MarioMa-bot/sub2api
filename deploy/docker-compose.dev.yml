@@ -55,7 +55,7 @@ services:
       - HTTP_PROXY=${SUB2API_DEV_HTTP_PROXY:-http://host.docker.internal:7897}
       - HTTPS_PROXY=${SUB2API_DEV_HTTPS_PROXY:-http://host.docker.internal:7897}
       - ALL_PROXY=${SUB2API_DEV_ALL_PROXY:-socks5://host.docker.internal:7897}
-      - NO_PROXY=${SUB2API_DEV_NO_PROXY:-127.0.0.1,localhost,::1,postgres,redis,sub2api,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,.local}
+      - NO_PROXY=${SUB2API_DEV_NO_PROXY:-127.0.0.1,localhost,::1,postgres,redis,sub2api,privacy-ner,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,.local}
       # Gateway values come from Compose .env or the shell.
       # Fallbacks mirror Sub2API backend defaults so omitted values preserve behavior.
       - GATEWAY_FORCE_CODEX_CLI=${GATEWAY_FORCE_CODEX_CLI:-false}
@@ -107,6 +107,8 @@ services:
       - BATCH_IMAGE_VERTEX_MANAGED_GCS_PREFIX=${BATCH_IMAGE_VERTEX_MANAGED_GCS_PREFIX:-batch-image/prod/{batch_id}}
       - BATCH_IMAGE_VERTEX_INPUT_RETENTION_HOURS=${BATCH_IMAGE_VERTEX_INPUT_RETENTION_HOURS:-24}
       - BATCH_IMAGE_VERTEX_OUTPUT_RETENTION_HOURS=${BATCH_IMAGE_VERTEX_OUTPUT_RETENTION_HOURS:-72}
+      # 智能脱敏旁路地址（管理后台未填写时使用）/ smart masking sidecar URL fallback
+      - PRIVACY_MASKING_SMART_URL=${PRIVACY_MASKING_SMART_URL:-http://privacy-ner:5002}
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +122,24 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # 智能脱敏旁路（Presidio Analyzer，CPU）；不可用时后端自动降级为仅规则脱敏
+  # Smart-detection sidecar (Presidio Analyzer, CPU); backend falls back to rules-only when it is down
+  privacy-ner:
+    build:
+      context: ./presidio
+      args:
+        PIP_INDEX_URL: ${PRIVACY_NER_PIP_INDEX_URL:-https://pypi.org/simple}
+    container_name: sub2api-privacy-ner-dev
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PRIVACY_NER_LANGUAGES=${PRIVACY_NER_LANGUAGES:-en,zh}
+      - PRIVACY_NER_MIN_SCORE=${PRIVACY_NER_MIN_SCORE:-0.5}
+      - PRIVACY_NER_MAX_TEXT_CHARS=${PRIVACY_NER_MAX_TEXT_CHARS:-65536}
+    networks:
+      - sub2api-network
 
   postgres:
     image: postgres:18-alpine
