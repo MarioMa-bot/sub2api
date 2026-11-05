@@ -39,6 +39,7 @@ func newGatewayRoutesTestRouterWithGroup(group *service.Group) *gin.Engine {
 		nil,
 		nil,
 		nil,
+		nil,
 		&config.Config{
 			Gateway: config.GatewayConfig{
 				MaxBodySize:     1024 * 1024,
