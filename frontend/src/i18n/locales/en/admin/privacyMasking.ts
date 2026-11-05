@@ -65,11 +65,51 @@ export default {
           label: 'Credit Cards',
           description: 'Credit card numbers',
         },
+        PERSON: {
+          label: 'Person',
+          description: 'Person names (smart detection)',
+        },
+        LOCATION: {
+          label: 'Location',
+          description: 'Cities, countries, addresses (smart detection)',
+        },
+        ORG: {
+          label: 'Organization',
+          description: 'Company and organization names (smart detection)',
+        },
+        NRP: {
+          label: 'Nationality/Religion/Political',
+          description: 'Nationalities, religious or political groups (smart detection, noisy)',
+        },
+        DATE_TIME: {
+          label: 'Date/Time',
+          description: 'Dates and times (smart detection, noisy)',
+        },
         CUSTOM: {
           label: 'Custom',
           description: 'Matched by a custom rule',
         },
       },
+    },
+
+    // Smart detection (Presidio sidecar)
+    smart: {
+      title: 'Smart detection / 智能检测',
+      badge: 'Beta',
+      description:
+        'In addition to rules, call the Presidio sidecar to detect person, location and organization entities. They are replaced with placeholders and restored in responses. Only message text fields are scanned; logs keep kinds and counts only.',
+      url: 'Sidecar URL',
+      urlHint: 'Leave empty to use the backend env var PRIVACY_MASKING_SMART_URL; docker compose default is http://privacy-ner:5002',
+      check: 'Test connection',
+      checking: 'Testing...',
+      checkOk: 'Connected: {url} ({ms} ms)',
+      checkFailed: 'Connection failed: {error}',
+      timeout: 'Timeout (ms)',
+      timeoutHint: 'Hard per-request timeout, 50-100 ms recommended, default 80 ms',
+      minScore: 'Score threshold',
+      minScoreHint: '0-1, entities below the threshold are ignored, default 0.6',
+      entities: 'Entity types and actions',
+      fallbackHint: 'If the sidecar times out, fails or is not deployed, masking silently falls back to rules only; requests never fail because of it.',
     },
 
     // Allow list
