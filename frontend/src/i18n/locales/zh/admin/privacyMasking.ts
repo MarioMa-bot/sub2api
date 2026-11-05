@@ -76,7 +76,7 @@ export default {
     allowList: {
       title: '白名单',
       description: '这些值永远不会被脱敏（每行一个，精确匹配，不区分大小写）',
-      placeholder: 'example-key-12345\ntest@example.com\n+1234567890',
+      placeholder: "example-key-12345\ntest{'@'}example.com\n+1234567890",
       hint: '添加已知安全的值，如测试密钥',
     },
 
@@ -167,11 +167,11 @@ export default {
     help: {
       howItWorks: {
         title: '工作原理',
-        description: '脱敏功能会在请求发送到上游 API 前自动检测并替换敏感信息为占位符（如 {{API_KEY_hash}}），响应返回时再将占位符恢复为原始值。原始值仅存储在内存中，不会写入磁盘。',
+        description: "脱敏功能会在请求发送到上游 API 前自动检测并替换敏感信息为占位符（如 {'{{'}API_KEY_hash{'}}'}），响应返回时再将占位符恢复为原始值。原始值仅存储在内存中，不会写入磁盘。",
       },
       placeholders: {
         title: '占位符格式',
-        description: '敏感值会被替换为 {{KIND_hash}} 格式的占位符，例如 {{API_KEY_a3b4c5d6}}。相同的值总是生成相同的占位符，保证上下文一致性。',
+        description: "敏感值会被替换为 {'{{'}KIND_hash{'}}'} 格式的占位符，例如 {'{{'}API_KEY_a3b4c5d6{'}}'}。相同的值总是生成相同的占位符，保证上下文一致性。",
       },
       safety: {
         title: '安全保障',

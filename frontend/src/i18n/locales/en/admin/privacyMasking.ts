@@ -76,7 +76,7 @@ export default {
     allowList: {
       title: 'Allow List',
       description: 'These values will never be masked (one per line, exact match, case-insensitive)',
-      placeholder: 'example-key-12345\ntest@example.com\n+1234567890',
+      placeholder: "example-key-12345\ntest{'@'}example.com\n+1234567890",
       hint: 'Add known safe values like test keys',
     },
 
@@ -167,11 +167,11 @@ export default {
     help: {
       howItWorks: {
         title: 'How It Works',
-        description: 'Masking feature automatically detects and replaces sensitive data with placeholders (like {{API_KEY_hash}}) before sending to upstream API. Original values are restored when responses return. Raw values are stored in memory only, never written to disk.',
+        description: "Masking feature automatically detects and replaces sensitive data with placeholders (like {'{{'}API_KEY_hash{'}}'}) before sending to upstream API. Original values are restored when responses return. Raw values are stored in memory only, never written to disk.",
       },
       placeholders: {
         title: 'Placeholder Format',
-        description: 'Sensitive values are replaced with {{KIND_hash}} format placeholders, e.g. {{API_KEY_a3b4c5d6}}. Same value always generates same placeholder to ensure context consistency.',
+        description: "Sensitive values are replaced with {'{{'}KIND_hash{'}}'} format placeholders, e.g. {'{{'}API_KEY_a3b4c5d6{'}}'}. Same value always generates same placeholder to ensure context consistency.",
       },
       safety: {
         title: 'Safety First',
